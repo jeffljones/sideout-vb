@@ -7,9 +7,9 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
    ===================================================================== */
 
 import {
-  uid, nameOf, groupOf, groupLabel, sideLabel, sidePlayerIds,
+  uid, nameOf, groupOf, groupLabel, sideLabel, sideStatIds, sidePlayerIds,
   genPoolPlay, genPairsRound, genMixRound,
-  calcStandings, buildPairs, buildTeams,
+  calcStandings, buildTeamsFromRegs, buildPairsFromRegs,
   matchDone, matchGames, seriesScore, getGameTarget,
   seedBracket, startPlayoffs, advanceBracket, genResetFinal,
   bracketStatus, calcPlacements, eventBrackets,
@@ -269,8 +269,9 @@ function MatchCard({ cfg, match, result, series, onTap, highlightIds }) {
   const isSeries = !!match.br;
   const done = isSeries ? series.done : !!result;
   const started = isSeries && series.games.length > 0;
-  const aIds = sidePlayerIds(cfg, match.a);
-  const bIds = sidePlayerIds(cfg, match.b);
+  // highlight by player id or group id (teams identify by team)
+  const aIds = [...sideStatIds(cfg, match.a), ...sidePlayerIds(cfg, match.a)];
+  const bIds = [...sideStatIds(cfg, match.b), ...sidePlayerIds(cfg, match.b)];
   const mine = highlightIds && (aIds.some((x) => highlightIds.has(x)) || bIds.some((x) => highlightIds.has(x)));
   const aWin = done && (isSeries ? series.aW > series.bW : result.a > result.b);
   const Side = ({ side, score, games, win }) => (
@@ -556,17 +557,28 @@ export default function App() {
   };
 
   /* -------------------- signup -------------------- */
+  // Registration unit follows the format: teams events register a team,
+  // pairs events register a pair, mix registers an individual.
   const register = () => {
     const nm = regName.trim();
-    if (!nm) { say("Enter a name."); return; }
+    if (!nm) { say(cfg.format === "teams" ? "Enter a team name." : "Enter a name."); return; }
     if (regs.some((r) => r.name.toLowerCase() === nm.toLowerCase())) {
-      say("That name's taken — add a last initial."); return;
+      say(cfg.format === "teams" ? "That team name's taken." : "That name's taken — add a last initial.");
+      return;
+    }
+    if (cfg.format === "pairs") {
+      const p2 = regExtra.trim();
+      if (!p2) { say("Pairs sign up together — add your partner's name."); return; }
+      if (p2.toLowerCase() === nm.toLowerCase()) { say("Two different names."); return; }
+      const taken = (n) => regs.some((r) =>
+        r.name.toLowerCase() === n.toLowerCase() || (r.extra || "").toLowerCase() === n.toLowerCase());
+      if (taken(nm) || taken(p2)) { say("One of those names is already signed up."); return; }
     }
     store.register(code, nm, regExtra.trim(), cfg.format === "teams" ? regLvl : "")
       .catch((e) => { console.error(e); say("Couldn't save — check connection and retry."); });
     setRegName(""); setRegExtra(""); setRegLvl("");
-    say(`${nm} is in. 🏐`);
-    if (!me) { setMe(nm); store.setMe(code, nm); }
+    say(cfg.format === "teams" ? `${nm} is registered. 🏐` : `${nm} ${cfg.format === "pairs" ? `& ${regExtra.trim()} are` : "is"} in. 🏐`);
+    if (!me) { setMe(nm); store.setMe(code, nm); } // teams: identity = your team
   };
 
   const removeReg = (r) => {
@@ -574,17 +586,18 @@ export default function App() {
       .catch((e) => { console.error(e); say("Couldn't remove — check connection."); });
   };
 
-  // director adds a player on someone's behalf (no phone needed)
+  // director adds a team/pair/player on someone's behalf (no phone needed)
   const directorAdd = () => {
     const nm = walkName.trim();
-    if (!nm) { say("Enter a name."); return; }
+    if (!nm) { say(cfg.format === "teams" ? "Enter a team name." : "Enter a name."); return; }
     if (regs.some((r) => r.name.toLowerCase() === nm.toLowerCase())) {
-      say("That name's already on the roster."); return;
+      say("That name's already registered."); return;
     }
+    if (cfg.format === "pairs" && !walkExtra.trim()) { say("Pairs need both names."); return; }
     store.register(code, nm, walkExtra.trim(), cfg.format === "teams" ? walkLvl : "")
       .catch((e) => { console.error(e); say("Couldn't save — check connection and retry."); });
     setWalkName(""); setWalkExtra(""); setWalkLvl("");
-    say(`${nm} added to the roster.`);
+    say(`${nm} added.`);
   };
 
   const unlockAdmin = () => {
@@ -605,8 +618,8 @@ export default function App() {
 
   /* -------------------- setup → start -------------------- */
   const startSetup = () => {
-    const roster = regs.map((r) => ({ id: uid(), name: r.name }));
     if (cfg.format === "mix") {
+      const roster = regs.map((r) => ({ id: uid(), name: r.name }));
       if (roster.length < 4) { say("Need at least 4 players."); return; }
       const live = { ...cfg, roster, status: "live", sat: Object.fromEntries(roster.map((r) => [r.id, 0])) };
       pushCfg(live);
@@ -614,9 +627,10 @@ export default function App() {
       setTab("admin");
       return;
     }
-    const groups = cfg.format === "pairs"
-      ? buildPairs(roster, regs)
-      : buildTeams(roster, regs, cfg.teamSize);
+    // teams and pairs register as units — regs map 1:1 to groups
+    const { roster, groups } = cfg.format === "pairs"
+      ? buildPairsFromRegs(regs)
+      : buildTeamsFromRegs(regs);
     setSetupRoster(roster); setSetupGroups(groups); setSel(null);
     setSetupPools(1); setSetupPlan("pool");
     setSetupMode(true);
@@ -629,13 +643,6 @@ export default function App() {
   const flipPool = (gid) => {
     setSetupGroups(setupGroups.map((g) =>
       g.id === gid ? { ...g, pool: ((g.pool || 1) % setupPools) + 1 } : g));
-  };
-
-  const reshuffleSetup = () => {
-    const groups = cfg.format === "pairs"
-      ? buildPairs(setupRoster, regs)
-      : buildTeams(setupRoster, regs, cfg.teamSize);
-    setSetupGroups(groups); setSel(null);
   };
 
   const tapChip = (pid) => {
@@ -653,19 +660,30 @@ export default function App() {
     setSel(null);
   };
 
-  const addSetupPlayer = () => {
+  // walk-ups at the setup table arrive as whole units too
+  const addSetupUnit = () => {
     const nm = walkName.trim();
     if (!nm) return;
-    if (setupRoster.some((r) => r.name.toLowerCase() === nm.toLowerCase())) { say("Name's taken."); return; }
-    const p = { id: uid(), name: nm };
-    const roster = [...setupRoster, p];
-    const gs = setupGroups.map((g) => ({ ...g, players: [...g.players] }));
-    const want = cfg.format === "pairs" ? 2 : cfg.teamSize;
-    const short = gs.filter((g) => g.players.length < want)
-      .sort((a, b) => a.players.length - b.players.length)[0];
-    if (short) short.players.push(p.id);
-    else gs.push({ id: uid(), name: cfg.format === "pairs" ? "Pair " + (gs.length + 1) : "Team +", players: [p.id] });
-    setSetupRoster(roster); setSetupGroups(gs); setWalkName("");
+    if (cfg.format === "teams") {
+      if (setupGroups.some((g) => g.name.toLowerCase() === nm.toLowerCase())) { say("Team name's taken."); return; }
+      const players = walkExtra.split(",").map((s) => s.trim()).filter(Boolean)
+        .map((n) => ({ id: uid(), name: n }));
+      setSetupRoster([...setupRoster, ...players]);
+      setSetupGroups([...setupGroups, {
+        id: uid(), name: nm, players: players.map((p) => p.id),
+        ...(setupPools > 1 ? { pool: setupPools } : {}),
+      }]);
+      setWalkName(""); setWalkExtra("");
+      return;
+    }
+    const p2 = walkName2.trim();
+    if (!p2) { say("Pairs need both names."); return; }
+    const taken = (n) => setupRoster.some((r) => r.name.toLowerCase() === n.toLowerCase());
+    if (taken(nm) || taken(p2)) { say("One of those names is already playing."); return; }
+    const ps = [{ id: uid(), name: nm }, { id: uid(), name: p2 }];
+    setSetupRoster([...setupRoster, ...ps]);
+    setSetupGroups([...setupGroups, { id: uid(), name: "Pair " + (setupGroups.length + 1), players: ps.map((p) => p.id) }]);
+    setWalkName(""); setWalkName2("");
   };
 
   const renameGroup = (gid, name) => {
@@ -673,7 +691,8 @@ export default function App() {
   };
 
   const lockStart = () => {
-    const full = setupGroups.filter((g) => g.players.length >= (cfg.format === "pairs" ? 2 : 1));
+    // teams are valid with any (or no) listed players; pairs need both
+    const full = setupGroups.filter((g) => cfg.format === "teams" || g.players.length >= 2);
     const benched = setupGroups.filter((g) => !full.includes(g));
     if (full.length < 2) { say("Need at least 2 complete " + (cfg.format === "pairs" ? "pairs." : "teams.")); return; }
     let live = {
@@ -902,10 +921,19 @@ export default function App() {
   };
 
   /* -------------------- derived -------------------- */
+  // teams format: identity is your team (matches by team id even when the
+  // team never listed player names); other formats match by player name
   const myIds = useMemo(() => {
     if (!cfg || !me) return new Set();
-    const mine = cfg.roster.filter((r) => r.name.toLowerCase() === me.toLowerCase()).map((r) => r.id);
-    return new Set(mine);
+    const ids = [];
+    if (cfg.format === "teams") {
+      for (const g of cfg.groups || []) {
+        if (g.name.toLowerCase() === me.toLowerCase()) { ids.push(g.id, ...g.players); }
+      }
+    } else {
+      ids.push(...cfg.roster.filter((r) => r.name.toLowerCase() === me.toLowerCase()).map((r) => r.id));
+    }
+    return new Set(ids);
   }, [cfg, me]);
 
   const standings = useMemo(() => (cfg && cfg.status !== "signup" ? calcStandings(cfg, res) : []), [cfg, res]);
@@ -1002,8 +1030,8 @@ export default function App() {
               <div style={{ fontSize: 13.5, opacity: 0.85, marginTop: 2 }}>{f.desc}</div>
             </div>
           ))}
-          {fFormat !== "pairs" && (
-            <Stepper label={fFormat === "mix" ? "Players per side" : "Players per team"} value={fTeamSize} onChange={setFTeamSize} min={2} max={6} />
+          {fFormat === "mix" && (
+            <Stepper label="Players per side" value={fTeamSize} onChange={setFTeamSize} min={2} max={6} />
           )}
           <Stepper label="Courts" value={fCourts} onChange={setFCourts} min={1} max={8} />
           <Eyebrow style={{ margin: "4px 0 8px", color: C.ink }}>{fFormat === "teams" ? "Pool games to" : "Game to"}</Eyebrow>
@@ -1065,32 +1093,42 @@ export default function App() {
           <div style={{ fontSize: 14, color: C.dim }}>Players: open this same app, punch in the code, add your name.</div>
         </Card>
         <Card style={{ marginBottom: 16 }}>
-          <Eyebrow style={{ marginBottom: 8 }}>Sign yourself up</Eyebrow>
-          <Field label="Your name" value={regName} onChange={setRegName} placeholder="First name + initial" maxLength={20} />
-          {cfg.format === "pairs" && (
-            <Field label="Partner (optional)" value={regExtra} onChange={setRegExtra} placeholder="Their name as they signed up" maxLength={20} hint="If you both list each other, you're locked in." />
+          <Eyebrow style={{ marginBottom: 8 }}>
+            {cfg.format === "teams" ? "Register your team" : cfg.format === "pairs" ? "Sign up your pair" : "Sign yourself up"}
+          </Eyebrow>
+          {cfg.format === "teams" ? (
+            <>
+              <Field label="Team name" value={regName} onChange={setRegName} placeholder="e.g. Net Gains" maxLength={20} />
+              <Field label="Players (optional)" value={regExtra} onChange={setRegExtra} placeholder="Ann, Ben, Cam…" maxLength={120} hint="First names, comma-separated — fine to leave blank." />
+              <div style={{ marginBottom: 14 }}>
+                <Eyebrow style={{ marginBottom: 6, color: C.ink }}>Level (optional)</Eyebrow>
+                <ChoiceRow value={regLvl} onChange={(v) => setRegLvl(v === regLvl ? "" : v)}
+                  options={LEVELS.map((l) => ({ v: l, label: l }))} />
+                <div style={{ fontSize: 12.5, color: C.dim, marginTop: 5 }}>Helps the director sort divisions — tap again to clear.</div>
+              </div>
+            </>
+          ) : cfg.format === "pairs" ? (
+            <>
+              <Field label="Your name" value={regName} onChange={setRegName} placeholder="First name + initial" maxLength={20} />
+              <Field label="Partner" value={regExtra} onChange={setRegExtra} placeholder="Their first name + initial" maxLength={20} hint="Pairs sign up together — one entry for both of you." />
+            </>
+          ) : (
+            <Field label="Your name" value={regName} onChange={setRegName} placeholder="First name + initial" maxLength={20} />
           )}
-          {cfg.format === "teams" && (
-            <Field label="Team name (optional)" value={regExtra} onChange={setRegExtra} placeholder="e.g. Net Gains" maxLength={20} hint="Everyone using the same team name lands together." />
-          )}
-          {cfg.format === "teams" && (
-            <div style={{ marginBottom: 14 }}>
-              <Eyebrow style={{ marginBottom: 6, color: C.ink }}>Level (optional)</Eyebrow>
-              <ChoiceRow value={regLvl} onChange={(v) => setRegLvl(v === regLvl ? "" : v)}
-                options={LEVELS.map((l) => ({ v: l, label: l }))} />
-              <div style={{ fontSize: 12.5, color: C.dim, marginTop: 5 }}>Helps the director sort divisions — tap again to clear.</div>
-            </div>
-          )}
-          <Btn style={{ width: "100%" }} disabled={busy} onClick={register}>I'm in 🏐</Btn>
+          <Btn style={{ width: "100%" }} disabled={busy} onClick={register}>
+            {cfg.format === "teams" ? "Register team 🏐" : cfg.format === "pairs" ? "We're in 🏐" : "I'm in 🏐"}
+          </Btn>
         </Card>
         <Card style={{ marginBottom: 16 }}>
-          <Eyebrow style={{ marginBottom: 8 }}>Roster · {regs.length}</Eyebrow>
+          <Eyebrow style={{ marginBottom: 8 }}>
+            {cfg.format === "teams" ? "Teams" : cfg.format === "pairs" ? "Pairs" : "Roster"} · {regs.length}
+          </Eyebrow>
           {regs.length === 0 && <div style={{ color: C.dim, fontSize: 14.5 }}>Nobody yet — be the first one in.</div>}
           {regs.map((r) => (
             <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 2px", borderBottom: `1.5px dashed ${C.line}` }}>
               <div>
                 <span style={{ fontWeight: 700 }}>{r.name}</span>
-                {r.extra && <span style={{ color: C.dim, fontSize: 13 }}> · {cfg.format === "pairs" ? "w/ " : ""}{r.extra}</span>}
+                {r.extra && <span style={{ color: C.dim, fontSize: 13 }}>{cfg.format === "pairs" ? " / " : " · "}{r.extra}</span>}
                 {r.lvl && <span style={{ fontFamily: MONO, color: C.dim, fontSize: 12 }}> · {r.lvl}</span>}
               </div>
               {adminOk && <button onClick={() => removeReg(r)} style={{ border: "none", background: "none", color: "#B3261E", fontWeight: 800, fontSize: 16, cursor: "pointer" }}>✕</button>}
@@ -1112,15 +1150,20 @@ export default function App() {
                 {cfg.format === "mix"
                   ? "Start when everyone's here — teams shuffle every round."
                   : cfg.format === "pairs"
-                    ? "Starting builds pairs from partner requests; you can edit before locking."
-                    : "Starting builds teams from team names; you can edit before locking."}
+                    ? "Each entry is a pair; you can swap partners before locking."
+                    : "Each entry is a team; you can edit names, players, and pools before locking."}
               </div>
-              <Eyebrow style={{ margin: "2px 0 6px" }}>Add a player — no phone needed</Eyebrow>
-              <input value={walkName} onChange={(e) => setWalkName(e.target.value)} placeholder="Name"
+              <Eyebrow style={{ margin: "2px 0 6px" }}>
+                {cfg.format === "teams" ? "Add a team — no phones needed"
+                  : cfg.format === "pairs" ? "Add a pair — no phones needed"
+                  : "Add a player — no phone needed"}
+              </Eyebrow>
+              <input value={walkName} onChange={(e) => setWalkName(e.target.value)}
+                placeholder={cfg.format === "teams" ? "Team name" : cfg.format === "pairs" ? "Player 1" : "Name"}
                 style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `2px solid ${C.ink}`, borderRadius: 10, fontSize: 16, marginBottom: 8, background: "#fff", color: C.ink }} />
               {cfg.format !== "mix" && (
                 <input value={walkExtra} onChange={(e) => setWalkExtra(e.target.value)}
-                  placeholder={cfg.format === "pairs" ? "Partner (optional)" : "Team name (optional)"}
+                  placeholder={cfg.format === "pairs" ? "Player 2" : "Players (optional, comma-separated)"}
                   style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `2px solid ${C.ink}`, borderRadius: 10, fontSize: 16, marginBottom: 8, background: "#fff", color: C.ink }} />
               )}
               {cfg.format === "teams" && (
@@ -1129,9 +1172,13 @@ export default function App() {
                     options={LEVELS.map((l) => ({ v: l, label: l }))} />
                 </div>
               )}
-              <Btn kind="ink" small style={{ width: "100%", marginBottom: 14 }} onClick={directorAdd}>Add to roster</Btn>
-              <Btn kind="green" style={{ width: "100%" }} disabled={regs.length < 4 || busy} onClick={startSetup}>
-                {cfg.format === "mix" ? "Start event" : "Build " + (cfg.format === "pairs" ? "pairs" : "teams") + " →"}
+              <Btn kind="ink" small style={{ width: "100%", marginBottom: 14 }} onClick={directorAdd}>
+                {cfg.format === "teams" ? "Add team" : cfg.format === "pairs" ? "Add pair" : "Add to roster"}
+              </Btn>
+              <Btn kind="green" style={{ width: "100%" }}
+                disabled={(cfg.format === "mix" ? regs.length < 4 : regs.length < 2) || busy}
+                onClick={startSetup}>
+                {cfg.format === "mix" ? "Start event" : "Review " + (cfg.format === "pairs" ? "pairs" : "teams") + " →"}
               </Btn>
             </div>
           )}
@@ -1142,7 +1189,7 @@ export default function App() {
 
   /* ---------- setup editor ---------- */
   function renderSetup() {
-    const want = cfg.format === "pairs" ? 2 : cfg.teamSize;
+    const want = cfg.format === "pairs" ? 2 : 0; // teams: any roster size is fine
     return (
       <Shell toast={toast}>
         {renderHeader()}
@@ -1212,17 +1259,20 @@ export default function App() {
           </Card>
         ))}
         <Card style={{ marginBottom: 14 }}>
-          <Eyebrow style={{ marginBottom: 8 }}>Add a walk-up</Eyebrow>
-          <div style={{ display: "flex", gap: 10 }}>
-            <input value={walkName} onChange={(e) => setWalkName(e.target.value)} placeholder="Name"
-              style={{ flex: 1, padding: "10px 12px", border: `2px solid ${C.ink}`, borderRadius: 10, fontSize: 16, minWidth: 0, background: "#fff", color: C.ink }} />
-            <Btn small onClick={addSetupPlayer}>Add</Btn>
-          </div>
+          <Eyebrow style={{ marginBottom: 8 }}>{cfg.format === "teams" ? "Add a walk-up team" : "Add a walk-up pair"}</Eyebrow>
+          <input value={walkName} onChange={(e) => setWalkName(e.target.value)}
+            placeholder={cfg.format === "teams" ? "Team name" : "Player 1"}
+            style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `2px solid ${C.ink}`, borderRadius: 10, fontSize: 16, marginBottom: 8, background: "#fff", color: C.ink }} />
+          {cfg.format === "teams" ? (
+            <input value={walkExtra} onChange={(e) => setWalkExtra(e.target.value)} placeholder="Players (optional, comma-separated)"
+              style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `2px solid ${C.ink}`, borderRadius: 10, fontSize: 16, marginBottom: 8, background: "#fff", color: C.ink }} />
+          ) : (
+            <input value={walkName2} onChange={(e) => setWalkName2(e.target.value)} placeholder="Player 2"
+              style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `2px solid ${C.ink}`, borderRadius: 10, fontSize: 16, marginBottom: 8, background: "#fff", color: C.ink }} />
+          )}
+          <Btn small style={{ width: "100%" }} onClick={addSetupUnit}>Add</Btn>
         </Card>
-        <div style={{ display: "flex", gap: 10 }}>
-          <Btn kind="ghost" style={{ flex: 1 }} onClick={reshuffleSetup}>Reshuffle</Btn>
-          <Btn kind="green" style={{ flex: 2 }} disabled={busy} onClick={lockStart}>Lock &amp; start ✓</Btn>
-        </div>
+        <Btn kind="green" style={{ width: "100%" }} disabled={busy} onClick={lockStart}>Lock &amp; start ✓</Btn>
         <div style={{ marginTop: 12 }}>
           <Btn kind="ghost" small onClick={() => setSetupMode(false)}>← Back to signup</Btn>
         </div>
@@ -1409,12 +1459,18 @@ export default function App() {
 
   /* ---------- live: me ---------- */
   function renderMe() {
+    const sideHasMe = (side) =>
+      [...sideStatIds(cfg, side), ...sidePlayerIds(cfg, side)].some((x) => myIds.has(x));
     if (!me || myIds.size === 0) {
-      const names = cfg.roster.map((r) => r.name).filter((n) => n.toLowerCase().includes(meFilter.toLowerCase()));
+      const opts = cfg.format === "teams"
+        ? (cfg.groups || []).map((g) => g.name)
+        : cfg.roster.map((r) => r.name);
+      const names = opts.filter((n) => n.toLowerCase().includes(meFilter.toLowerCase()));
       return (
         <Card>
-          <Eyebrow style={{ marginBottom: 8 }}>Who are you?</Eyebrow>
-          <input value={meFilter} onChange={(e) => setMeFilter(e.target.value)} placeholder="Find your name…"
+          <Eyebrow style={{ marginBottom: 8 }}>{cfg.format === "teams" ? "Which team are you on?" : "Who are you?"}</Eyebrow>
+          <input value={meFilter} onChange={(e) => setMeFilter(e.target.value)}
+            placeholder={cfg.format === "teams" ? "Find your team…" : "Find your name…"}
             style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: `2px solid ${C.ink}`, borderRadius: 10, fontSize: 16, marginBottom: 12, background: "#fff", color: C.ink }} />
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {names.map((n) => (
@@ -1424,13 +1480,12 @@ export default function App() {
         </Card>
       );
     }
-    const mine = cfg.sched.filter((m) =>
-      sidePlayerIds(cfg, m.a).some((x) => myIds.has(x)) || sidePlayerIds(cfg, m.b).some((x) => myIds.has(x)));
+    const mine = cfg.sched.filter((m) => sideHasMe(m.a) || sideHasMe(m.b));
     const pending = mine.filter((m) => !matchDone(m, res));
     const played = mine.filter((m) => matchDone(m, res)).reverse();
     let w = 0, l = 0, diff = 0;
     for (const m of mine) {
-      const onA = sidePlayerIds(cfg, m.a).some((x) => myIds.has(x));
+      const onA = sideHasMe(m.a);
       for (const r of matchGames(m, res)) { // every completed game counts
         const my = onA ? r.a : r.b, their = onA ? r.b : r.a;
         my > their ? w++ : l++; diff += my - their;
@@ -1448,7 +1503,7 @@ export default function App() {
             <div style={{ fontFamily: MONO, fontSize: 13, color: diff >= 0 ? C.green : "#B3261E" }}>{diff >= 0 ? "+" : ""}{diff}</div>
           </div>
         </Card>
-        <button onClick={() => { setMe(""); store.clearMe(code); }} style={{ border: "none", background: "none", color: C.dim, fontSize: 13, textDecoration: "underline", marginBottom: 12, cursor: "pointer", padding: 0 }}>Not you? Switch player</button>
+        <button onClick={() => { setMe(""); store.clearMe(code); }} style={{ border: "none", background: "none", color: C.dim, fontSize: 13, textDecoration: "underline", marginBottom: 12, cursor: "pointer", padding: 0 }}>Not you? Switch {cfg.format === "teams" ? "team" : "player"}</button>
         <Eyebrow style={{ margin: "4px 0 10px" }}>Up next</Eyebrow>
         {pending.length === 0 && <div style={{ color: C.dim, fontSize: 14.5, marginBottom: 14 }}>Nothing on the board — hydrate. 🧃</div>}
         {pending.map((m) => <MatchCard key={m.id} cfg={cfg} match={m} result={null} series={m.br ? seriesScore(m, res) : null} highlightIds={myIds} onTap={() => setModal(m)} />)}

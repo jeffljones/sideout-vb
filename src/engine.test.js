@@ -806,3 +806,57 @@ describe("ref assignments", () => {
     expect(pool.sched[0].ref).toBeUndefined();
   });
 });
+
+/* ---------------- unit-based registration (teams & pairs) ---------------- */
+import { buildTeamsFromRegs, buildPairsFromRegs } from "./engine.js";
+
+describe("unit registrations", () => {
+  it("one team reg = one team, players parsed from the comma list", () => {
+    const regs = [
+      { name: "Net Gains", extra: "Ann, Ben ,Cam", lvl: "BB" },
+      { name: "Spiked", extra: "", lvl: "A" },
+      { name: "Sandbaggers", extra: "Dee" },
+    ];
+    const { roster, groups } = buildTeamsFromRegs(regs);
+    expect(groups).toHaveLength(3);
+    expect(groups.map((g) => g.name)).toEqual(["Net Gains", "Spiked", "Sandbaggers"]);
+    expect(groups[0].players).toHaveLength(3);
+    expect(groups[0].lvl).toBe("BB");
+    expect(groups[1].players).toHaveLength(0); // unlisted rosters are fine
+    expect(groups[2].lvl).toBeUndefined();
+    expect(roster).toHaveLength(4);
+    const names = roster.map((r) => r.name);
+    expect(names).toContain("Ann");
+    expect(names).toContain("Cam"); // trimmed
+    // every roster id belongs to exactly one team
+    const all = groups.flatMap((g) => g.players);
+    expect(new Set(all).size).toBe(all.length);
+    expect(all.sort()).toEqual(roster.map((r) => r.id).sort());
+  });
+
+  it("one pair reg = one pair with both names on the roster", () => {
+    const regs = [
+      { name: "Ann", extra: "Ben" },
+      { name: "Cam", extra: "Dee" },
+    ];
+    const { roster, groups } = buildPairsFromRegs(regs);
+    expect(groups).toHaveLength(2);
+    expect(roster).toHaveLength(4);
+    expect(groups[0].players).toHaveLength(2);
+    expect(groups[0].name).toBe("Pair 1");
+    const nameOfId = (id) => roster.find((r) => r.id === id).name;
+    expect(groups[0].players.map(nameOfId)).toEqual(["Ann", "Ben"]);
+    expect(groups[1].players.map(nameOfId)).toEqual(["Cam", "Dee"]);
+  });
+
+  it("team groups flow straight into pool assignment by level", () => {
+    const { groups } = buildTeamsFromRegs([
+      { name: "T1", lvl: "Rec" }, { name: "T2", lvl: "Open" },
+      { name: "T3", lvl: "BB" }, { name: "T4", lvl: "AA" },
+    ]);
+    const pooled = autoAssignPools(groups, 2);
+    const pool = (n) => pooled.find((g) => g.name === n).pool;
+    expect(pool("T2")).toBe(1); expect(pool("T4")).toBe(1); // Open, AA up top
+    expect(pool("T3")).toBe(2); expect(pool("T1")).toBe(2);
+  });
+});

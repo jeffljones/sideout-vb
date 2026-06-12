@@ -64,12 +64,14 @@ service cloud.firestore {
 
       match /regs/{regId} {
         allow read: if true;
+        // name: player, pair lead, or team name; extra: partner name or a
+        // comma-separated player list (hence the longer cap)
         allow create: if request.resource.data.keys().hasOnly(['name', 'extra', 'lvl', 'ts'])
           && request.resource.data.name is string
           && request.resource.data.name.size() >= 1
           && request.resource.data.name.size() <= 24
           && request.resource.data.extra is string
-          && request.resource.data.extra.size() <= 24
+          && request.resource.data.extra.size() <= 120
           && (!('lvl' in request.resource.data)
             || request.resource.data.lvl in ['Open', 'AA', 'A', 'BB', 'B', 'Rec'])
           && request.resource.data.ts is int;

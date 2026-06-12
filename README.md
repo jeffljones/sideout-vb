@@ -24,8 +24,16 @@ carry no phone at all (the director proxy-registers them).
    fairness (most-benched players go in first), small-group fallback
    shrinks team size instead of skipping a round.
 
+**Registration follows the competitive unit**: team events register a
+*team* (team name, optional comma-separated players, level), pairs events
+register a *pair* (both names, one entry), pickup mix registers
+individuals. Solos looking for a team are assembled offline by the
+director and proxy-added as a unit — deliberately not an in-app feature.
+Teams that never list players still work everywhere; the Me tab
+identifies by team in team events.
+
 Tournament-day realities the flow is built around: **one event hosts the
-whole tournament** — players state a level at signup (Open/AA/A/BB/B/Rec),
+whole tournament** — teams state a level at signup (Open/AA/A/BB/B/Rec),
 the director splits teams into up to six pool-play groups (auto-grouped
 by level, strongest in pool A, tap to override), and the playoff screen
 seeds **any number of brackets**: change the bracket count day-of (3
@@ -86,6 +94,8 @@ events/{CODE}                    the event config doc
   brackets [{pfx, name, seeds}…], po { g12, g3 }   ← playoffs (teams)
   seeds [groupId…]                ← legacy single-bracket events only
 events/{CODE}/regs/{autoId}      { name, extra, lvl?, ts }
+                                 teams: name=team, extra=player list
+                                 pairs: name=player 1, extra=player 2
 events/{CODE}/results/{matchId}  { a, b, ts }
 ```
 

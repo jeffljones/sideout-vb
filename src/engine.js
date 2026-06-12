@@ -225,6 +225,42 @@ export function calcStandings(cfg, res) {
 }
 
 /* ---------------------- roster → groups ---------------------- */
+// Team events: one registration IS one team — { name: team name,
+// extra: optional comma-separated player first names, lvl }. Returns
+// { roster, groups } with groups 1:1 to regs. Solos/orphans are handled
+// offline by the director (proxy-add the assembled team).
+export function buildTeamsFromRegs(regs) {
+  const roster = [];
+  const groups = regs.map((reg) => {
+    const players = (reg.extra || "")
+      .split(",").map((s) => s.trim()).filter(Boolean)
+      .map((n) => {
+        const p = { id: uid(), name: n };
+        roster.push(p);
+        return p.id;
+      });
+    return { id: uid(), name: reg.name, players, ...(reg.lvl ? { lvl: reg.lvl } : {}) };
+  });
+  return { roster, groups };
+}
+
+// Pairs events: one registration IS one pair — { name: player 1,
+// extra: player 2 }. Returns { roster, groups } with groups 1:1 to regs.
+export function buildPairsFromRegs(regs) {
+  const roster = [];
+  const groups = regs.map((reg, i) => {
+    const players = [reg.name, reg.extra]
+      .map((s) => (s || "").trim()).filter(Boolean)
+      .map((n) => {
+        const p = { id: uid(), name: n };
+        roster.push(p);
+        return p.id;
+      });
+    return { id: uid(), name: "Pair " + (i + 1), players };
+  });
+  return { roster, groups };
+}
+
 export function buildPairs(roster, regs) {
   const byName = new Map(roster.map((r) => [r.name.toLowerCase(), r.id]));
   const wants = new Map(); // pid -> wanted pid
