@@ -657,3 +657,27 @@ describe("ref assignments", () => {
     expect(cfg.sched[0].ref).toBe("t1");
   });
 });
+
+  it("reffing is best-effort: matches still post when nobody is free", () => {
+    // 2-team bracket: no third team exists, ever
+    const groups = [{ id: "x", name: "X", players: [] }, { id: "y", name: "Y", players: [] }];
+    const res = {};
+    let cfg = startPlayoffs(
+      baseCfg({ format: "teams", groups, courts: 1, stage: "pool", seeds: [], po: {} }),
+      res, { seeds: ["x", "y"], po: {} }
+    ).cfg;
+    expect(cfg.sched).toHaveLength(1);
+    expect(cfg.sched[0].ref).toBeUndefined(); // no whistle, no problem
+    winSeries(res, cfg.sched[0], "x");
+    cfg = advanceBracket(cfg, res).cfg; // 2-team double elim: gf is the rematch
+    const gf = cfg.sched.find((m) => m.id === "gf");
+    expect(gf).toBeTruthy();
+    expect(gf.ref).toBeUndefined();
+    winSeries(res, gf, "x");
+    expect(bracketStatus(cfg, res).champion).toBe("x");
+    expect(calcPlacements(cfg, res).map((p) => p.id)).toEqual(["x", "y"]);
+    // 2-team pool: same story
+    const pool = genPoolPlay(baseCfg({ format: "teams", groups, pools: 1, courts: 1 }));
+    expect(pool.sched).toHaveLength(1);
+    expect(pool.sched[0].ref).toBeUndefined();
+  });
