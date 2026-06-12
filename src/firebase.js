@@ -6,12 +6,13 @@ import { getFirestore } from "firebase/firestore";
    This object is public-safe by design — access control lives in
    firestore.rules, not in the config. */
 export const firebaseConfig = {
-  apiKey: "PASTE_ME",
+  apiKey: "AIzaSyAlsM5okZXHx5fkgqjVYCO5RAbl_DSolMY",
   authDomain: "sideout-vb.firebaseapp.com",
   projectId: "sideout-vb",
   storageBucket: "sideout-vb.firebasestorage.app",
-  messagingSenderId: "PASTE_ME",
-  appId: "PASTE_ME",
+  messagingSenderId: "972336973317",
+  appId: "1:972336973317:web:65fe6e3ac9b659cbb57e6c",
+  measurementId: "G-PYV3BJV732",
 };
 
 export const configReady = !Object.values(firebaseConfig).some((v) => String(v).includes("PASTE_ME"));
