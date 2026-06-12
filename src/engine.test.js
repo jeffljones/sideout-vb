@@ -334,7 +334,8 @@ describe("helpers", () => {
 import {
   genPoolPlay, matchGames, seriesScore, matchDone, getGameTarget,
   buildBracket, resolveBracket, bracketStatus, advanceBracket,
-  genResetFinal, seedFromStandings, startPlayoffs, calcPlacements,
+  genResetFinal, seedBracket, startPlayoffs, calcPlacements,
+  eventBrackets, autoAssignPools, LEVELS, lvlRank, poolName,
   genRoundRobin,
 } from "./engine.js";
 
@@ -391,23 +392,41 @@ describe("genPoolPlay", () => {
     expect(cfg.sched).toHaveLength(16); // 10 + 6
     expect(Object.values(cfg.byes).flat()).toHaveLength(5); // pool A bye each round
   });
+
+  it("three pools of three: independent round robins, bye team refs each", () => {
+    const groups = Array.from({ length: 9 }, (_, i) => ({
+      id: "t" + i, name: "T" + i, players: [], pool: Math.floor(i / 3) + 1,
+    }));
+    const cfg = genPoolPlay(baseCfg({ format: "teams", groups, pools: 3, courts: 3 }));
+    expect(cfg.sched).toHaveLength(9); // 3 matches per 3-team pool
+    expect(cfg.rds).toBe(3);
+    const poolOf = (gid) => groups.find((g) => g.id === gid).pool;
+    for (const m of cfg.sched) {
+      expect(poolOf(m.a.g[0])).toBe(poolOf(m.b.g[0]));
+      expect(m.pl).toBe(poolOf(m.a.g[0]));
+      expect(m.ref).toBeTruthy(); // 3-team pool: the resting team refs
+      expect(poolOf(m.ref)).toBe(m.pl);
+      expect([m.a.g[0], m.b.g[0]]).not.toContain(m.ref);
+    }
+    for (let rd = 1; rd <= 3; rd++) expect(cfg.byes[rd]).toHaveLength(3);
+  });
 });
 
 describe("series scoring", () => {
   it("bo3 series resolves at two game wins", () => {
-    const m = { id: "w1s1", br: "w", bo: 3 };
-    const res = { w1s1g1: { a: 21, b: 15 } };
+    const m = { id: "b1w1s1", br: "w", bo: 3 };
+    const res = { b1w1s1g1: { a: 21, b: 15 } };
     expect(seriesScore(m, res).done).toBe(false);
-    res.w1s1g2 = { a: 19, b: 21 };
+    res.b1w1s1g2 = { a: 19, b: 21 };
     expect(seriesScore(m, res).done).toBe(false);
-    res.w1s1g3 = { a: 15, b: 10 };
+    res.b1w1s1g3 = { a: 15, b: 10 };
     const s = seriesScore(m, res);
     expect(s).toMatchObject({ aW: 2, bW: 1, done: true });
     expect(matchDone(m, res)).toBe(true);
   });
 
   it("bo1 (losers bracket) resolves after one game; pool matches use plain ids", () => {
-    expect(matchDone({ id: "l1s1", br: "l", bo: 1 }, { l1s1g1: { a: 21, b: 12 } })).toBe(true);
+    expect(matchDone({ id: "b1l1s1", br: "l", bo: 1 }, { b1l1s1g1: { a: 21, b: 12 } })).toBe(true);
     expect(matchDone({ id: "m4" }, { m4: { a: 21, b: 12 } })).toBe(true);
     expect(matchGames({ id: "m4" }, {})).toEqual([]);
   });
@@ -415,15 +434,53 @@ describe("series scoring", () => {
   it("game targets: pool uses pointsTo; playoffs use po with short game 3", () => {
     const cfg = baseCfg({ pointsTo: 25, po: { g12: 21, g3: 15 } });
     expect(getGameTarget(cfg, { id: "m1" }, 0)).toBe(25);
-    expect(getGameTarget(cfg, { id: "w1s1", br: "w", bo: 3 }, 0)).toBe(21);
-    expect(getGameTarget(cfg, { id: "w1s1", br: "w", bo: 3 }, 2)).toBe(15);
-    expect(getGameTarget(cfg, { id: "l1s1", br: "l", bo: 1 }, 0)).toBe(21);
-    expect(getGameTarget(cfg, { id: "gf2", br: "gf2", bo: 1 }, 0)).toBe(15);
+    expect(getGameTarget(cfg, { id: "b1w1s1", br: "w", bo: 3 }, 0)).toBe(21);
+    expect(getGameTarget(cfg, { id: "b1w1s1", br: "w", bo: 3 }, 2)).toBe(15);
+    expect(getGameTarget(cfg, { id: "b1l1s1", br: "l", bo: 1 }, 0)).toBe(21);
+    expect(getGameTarget(cfg, { id: "b1gf2", br: "gf2", bo: 1 }, 0)).toBe(15);
   });
 });
 
-describe("seeding", () => {
-  it("two pools cross-seed A1,B1,A2,B2,…", () => {
+describe("levels & seeding", () => {
+  it("level order ranks Open strongest, unknown last", () => {
+    expect(LEVELS).toEqual(["Open", "AA", "A", "BB", "B", "Rec"]);
+    expect(lvlRank("Open")).toBeLessThan(lvlRank("AA"));
+    expect(lvlRank("Rec")).toBeLessThan(lvlRank(""));
+    expect(poolName(1)).toBe("A");
+    expect(poolName(3)).toBe("C");
+  });
+
+  it("autoAssignPools chunks by level, strongest levels in pool A", () => {
+    const gs = [
+      { id: "a", name: "Alpha", players: [], lvl: "B" },
+      { id: "b", name: "Bravo", players: [], lvl: "Open" },
+      { id: "c", name: "Chuck", players: [], lvl: "Rec" },
+      { id: "d", name: "Delta", players: [], lvl: "AA" },
+      { id: "e", name: "Echo", players: [] }, // no level → sorts last
+      { id: "f", name: "Fox", players: [], lvl: "A" },
+    ];
+    const out = autoAssignPools(gs, 2);
+    const pool = (id) => out.find((g) => g.id === id).pool;
+    expect(pool("b")).toBe(1); expect(pool("d")).toBe(1); expect(pool("f")).toBe(1);
+    expect(pool("a")).toBe(2); expect(pool("c")).toBe(2); expect(pool("e")).toBe(2);
+    expect(out.map((g) => g.id)).toEqual(gs.map((g) => g.id)); // original order kept
+  });
+
+  it("buildTeams tags groups with the first member's requested level", () => {
+    const roster = Array.from({ length: 4 }, (_, i) => ({ id: "p" + i, name: "N" + i }));
+    const regs = [
+      { name: "N0", extra: "Spiked", lvl: "BB" },
+      { name: "N1", extra: "spiked" },
+      { name: "N2", extra: "", lvl: "A" },
+      { name: "N3", extra: "" },
+    ];
+    const groups = buildTeams(roster, regs, 2);
+    expect(groups.find((g) => g.name === "Spiked").lvl).toBe("BB");
+    const auto = groups.find((g) => g.name !== "Spiked");
+    expect(auto.lvl).toBe("A");
+  });
+
+  it("seedBracket interleaves member pools A1,B1,A2,B2…", () => {
     const groups = [
       { id: "a1", name: "A1", players: [], pool: 1 }, { id: "a2", name: "A2", players: [], pool: 1 },
       { id: "b1", name: "B1", players: [], pool: 2 }, { id: "b2", name: "B2", players: [], pool: 2 },
@@ -436,7 +493,9 @@ describe("seeding", () => {
       ],
     });
     const res = { m1: { a: 21, b: 10 }, m2: { a: 21, b: 5 } };
-    expect(seedFromStandings(cfg, res)).toEqual(["a1", "b1", "a2", "b2"]);
+    expect(seedBracket(cfg, res, ["a1", "a2", "b1", "b2"])).toEqual(["a1", "b1", "a2", "b2"]);
+    // a bracket containing only one pool's teams: plain standings order
+    expect(seedBracket(cfg, res, ["a1", "a2"])).toEqual(["a1", "a2"]);
   });
 });
 
@@ -456,16 +515,16 @@ describe("double-elim bracket", () => {
 
   it("walks a 4-team bracket through to known placements", () => {
     const res = {};
-    let out = startPlayoffs(poCfg(), res, { seeds: seeds4, po: { g12: 21, g3: 15 } });
+    let out = startPlayoffs(poCfg(), res, { brackets: [seeds4], po: { g12: 21, g3: 15 } });
     expect(out.error).toBeUndefined();
     let cfg = out.cfg;
-    // round 1: seeded pairings 1v4, 2v3, Bo3, labeled
+    // round 1: seeded pairings 1v4, 2v3, Bo3, labeled, prefixed ids
     const r1 = cfg.sched;
-    expect(r1.map((m) => m.id).sort()).toEqual(["w1s1", "w1s2"]);
+    expect(r1.map((m) => m.id).sort()).toEqual(["b1w1s1", "b1w1s2"]);
     expect(r1[0].a.g[0]).toBe("t1"); expect(r1[0].b.g[0]).toBe("t4");
     expect(r1[1].a.g[0]).toBe("t2"); expect(r1[1].b.g[0]).toBe("t3");
     expect(r1[0].bo).toBe(3);
-    expect(r1[0].lbl).toBe("WINNERS R1");
+    expect(r1[0].lbl).toBe("WINNERS R1"); // single bracket: no letter prefix
     // full first round, nobody free: refs borrowed from the other matchup,
     // worst seeds first, top seed spared
     expect(r1[0].ref).toBe("t3");
@@ -474,60 +533,60 @@ describe("double-elim bracket", () => {
     winSeries(res, r1[1], "t2");
     cfg = advanceBracket(cfg, res).cfg;
     const ids = () => cfg.sched.map((m) => m.id);
-    expect(ids()).toContain("w2s1"); // winners final t1 v t2
-    expect(ids()).toContain("l1s1"); // losers r1 t4 v t3
-    expect(cfg.sched.find((m) => m.id === "w2s1").lbl).toBe("WINNERS FINAL");
-    expect(cfg.sched.find((m) => m.id === "l1s1").bo).toBe(1); // single-game losers bracket
-    winSeries(res, cfg.sched.find((m) => m.id === "w2s1"), "t1");
-    winSeries(res, cfg.sched.find((m) => m.id === "l1s1"), "t3");
+    expect(ids()).toContain("b1w2s1"); // winners final t1 v t2
+    expect(ids()).toContain("b1l1s1"); // losers r1 t4 v t3
+    expect(cfg.sched.find((m) => m.id === "b1w2s1").lbl).toBe("WINNERS FINAL");
+    expect(cfg.sched.find((m) => m.id === "b1l1s1").bo).toBe(1); // single-game losers bracket
+    winSeries(res, cfg.sched.find((m) => m.id === "b1w2s1"), "t1");
+    winSeries(res, cfg.sched.find((m) => m.id === "b1l1s1"), "t3");
     cfg = advanceBracket(cfg, res).cfg;
-    expect(ids()).toContain("l2s1"); // losers final: t3 v t2 (WB final loser)
-    const lf = cfg.sched.find((m) => m.id === "l2s1");
+    expect(ids()).toContain("b1l2s1"); // losers final: t3 v t2 (WB final loser)
+    const lf = cfg.sched.find((m) => m.id === "b1l2s1");
     expect(lf.lbl).toBe("LOSERS FINAL");
     expect([lf.a.g[0], lf.b.g[0]].sort()).toEqual(["t2", "t3"]);
     expect(lf.ref).toBe("t4"); // just lost the losers-bracket game → refs the next one
     winSeries(res, lf, "t3");
     cfg = advanceBracket(cfg, res).cfg;
-    const gf = cfg.sched.find((m) => m.id === "gf");
+    const gf = cfg.sched.find((m) => m.id === "b1gf");
     expect(gf.lbl).toBe("GRAND FINAL");
     expect(gf.bo).toBe(3);
     expect([gf.a.g[0], gf.b.g[0]]).toEqual(["t1", "t3"]);
     expect(gf.ref).toBe("t2"); // most recently beaten team gets the whistle
     winSeries(res, gf, "t1"); // WB champ holds — no reset
-    const bs = bracketStatus(cfg, res);
+    const [bs] = bracketStatus(cfg, res);
     expect(bs.needsReset).toBe(false);
     expect(bs.champion).toBe("t1");
     expect(advanceBracket(cfg, res).error).toMatch(/complete/);
-    expect(calcPlacements(cfg, res).map((p) => p.id)).toEqual(["t1", "t3", "t2", "t4"]);
+    expect(calcPlacements(cfg, res, eventBrackets(cfg)[0]).map((p) => p.id)).toEqual(["t1", "t3", "t2", "t4"]);
   });
 
   it("losers-bracket champ winning the grand final offers (not forces) a deciding game", () => {
     const res = {};
-    let cfg = startPlayoffs(poCfg(), res, { seeds: seeds4, po: {} }).cfg;
+    let cfg = startPlayoffs(poCfg(), res, { brackets: [seeds4], po: {} }).cfg;
     for (const m of cfg.sched) winSeries(res, m, m.a.g[0]); // t1, t2 advance
     cfg = advanceBracket(cfg, res).cfg;
     for (const m of cfg.sched.filter((m) => !matchDone(m, res))) winSeries(res, m, m.a.g[0]);
     cfg = advanceBracket(cfg, res).cfg;
     for (const m of cfg.sched.filter((m) => !matchDone(m, res))) winSeries(res, m, m.a.g[0]);
     cfg = advanceBracket(cfg, res).cfg;
-    const gf = cfg.sched.find((m) => m.id === "gf");
+    const gf = cfg.sched.find((m) => m.id === "b1gf");
     winSeries(res, gf, gf.b.g[0]); // LB champ takes the grand final
-    let bs = bracketStatus(cfg, res);
+    let [bs] = bracketStatus(cfg, res);
     expect(bs.needsReset).toBe(true);
     expect(bs.champion).toBe(gf.b.g[0]); // stands if the director ends it here
     expect(advanceBracket(cfg, res).error).toMatch(/deciding game/);
-    expect(cfg.sched.find((m) => m.id === "gf2")).toBeUndefined(); // never auto-created
-    cfg = genResetFinal(cfg, res).cfg;
-    const gf2 = cfg.sched.find((m) => m.id === "gf2");
+    expect(cfg.sched.find((m) => m.id === "b1gf2")).toBeUndefined(); // never auto-created
+    cfg = genResetFinal(cfg, res, "b1").cfg;
+    const gf2 = cfg.sched.find((m) => m.id === "b1gf2");
     expect(gf2.bo).toBe(1);
     expect(gf2.lbl).toBe("DECIDING GAME");
     expect(gf2.ref).toBeTruthy(); // an eliminated team refs the decider
     expect([gf2.a.g[0], gf2.b.g[0]]).not.toContain(gf2.ref);
     winSeries(res, gf2, gf2.b.g[0]); // WB champ wins the extra game after all
-    bs = bracketStatus(cfg, res);
+    [bs] = bracketStatus(cfg, res);
     expect(bs.needsReset).toBe(false);
     expect(bs.champion).toBe(gf2.b.g[0]);
-    expect(genResetFinal(cfg, res).error).toBeTruthy();
+    expect(genResetFinal(cfg, res, "b1").error).toBeTruthy();
   });
 
   it("full random tournaments stay structurally sound for 3–10 teams", () => {
@@ -537,7 +596,7 @@ describe("double-elim bracket", () => {
         const res = {};
         let cfg = startPlayoffs(
           baseCfg({ format: "teams", groups, courts: 3, stage: "pool", seeds: [], po: {} }),
-          res, { seeds: groups.map((g) => g.id), po: {} }
+          res, { brackets: [groups.map((g) => g.id)], po: {} }
         ).cfg;
         let guard = 0;
         while (guard++ < 60) {
@@ -547,14 +606,14 @@ describe("double-elim bracket", () => {
           if (adv.error) break;
           cfg = adv.cfg;
         }
-        let bs = bracketStatus(cfg, res);
+        let [bs] = bracketStatus(cfg, res);
         if (bs.needsReset && Math.random() < 0.5) {
-          cfg = genResetFinal(cfg, res).cfg;
-          const gf2 = cfg.sched.find((m) => m.id === "gf2");
+          cfg = genResetFinal(cfg, res, "b1").cfg;
+          const gf2 = cfg.sched.find((m) => m.id === "b1gf2");
           winSeries(res, gf2, Math.random() < 0.5 ? gf2.a.g[0] : gf2.b.g[0]);
-          bs = bracketStatus(cfg, res);
+          [bs] = bracketStatus(cfg, res);
         }
-        // structure: real distinct sides, unique ids, courts in range
+        // structure: real distinct sides, unique ids, courts in range, staffed
         const ids = cfg.sched.map((m) => m.id);
         expect(new Set(ids).size).toBe(ids.length);
         for (const m of cfg.sched) {
@@ -576,7 +635,7 @@ describe("double-elim bracket", () => {
         }
         expect(bs.champion).toBeTruthy();
         expect(losses.get(bs.champion)).toBeLessThanOrEqual(1);
-        const standsWithoutReset = bs.gfDone && bs.gfWonByLB && !cfg.sched.some((m) => m.id === "gf2");
+        const standsWithoutReset = bs.gfDone && bs.gfWonByLB && !cfg.sched.some((m) => m.id === "b1gf2");
         for (const g of groups) {
           if (g.id === bs.champion) continue;
           if (standsWithoutReset && g.id === bs.runnerUp)
@@ -584,7 +643,7 @@ describe("double-elim bracket", () => {
           else expect(losses.get(g.id)).toBe(2);
         }
         // placements: every seed exactly once, champion then runner-up first
-        const places = calcPlacements(cfg, res).map((p) => p.id);
+        const places = calcPlacements(cfg, res, eventBrackets(cfg)[0]).map((p) => p.id);
         expect(places).toHaveLength(N);
         expect(new Set(places).size).toBe(N);
         expect(places[0]).toBe(bs.champion);
@@ -593,10 +652,76 @@ describe("double-elim bracket", () => {
     }
   });
 
-  it("startPlayoffs rejects fewer than 2 unique teams and unknown ids", () => {
+  it("two brackets run independently with no cross-contamination", () => {
+    const groups = Array.from({ length: 9 }, (_, i) => ({ id: "t" + i, name: "T" + i, players: [] }));
+    const b1 = ["t0", "t1", "t2", "t3", "t4"], b2 = ["t5", "t6", "t7", "t8"];
+    const res = {};
+    let cfg = startPlayoffs(
+      baseCfg({ format: "teams", groups, courts: 4, stage: "pool", seeds: [], po: {} }),
+      res, { brackets: [b1, b2], po: {} }
+    ).cfg;
+    expect(cfg.sched.some((m) => m.lbl.startsWith("A · "))).toBe(true);
+    expect(cfg.sched.some((m) => m.lbl.startsWith("B · "))).toBe(true);
+    let guard = 0;
+    while (guard++ < 80) {
+      for (const m of cfg.sched.filter((m) => m.br && !matchDone(m, res)))
+        winSeries(res, m, Math.random() < 0.5 ? m.a.g[0] : m.b.g[0]);
+      const adv = advanceBracket(cfg, res);
+      if (adv.error) break;
+      cfg = adv.cfg;
+    }
+    for (const st of bracketStatus(cfg, res)) {
+      if (st.needsReset) {
+        cfg = genResetFinal(cfg, res, st.pfx).cfg;
+        const gf2 = cfg.sched.find((m) => m.id === st.pfx + "gf2");
+        winSeries(res, gf2, gf2.a.g[0]);
+      }
+    }
+    const statuses = bracketStatus(cfg, res);
+    expect(statuses).toHaveLength(2);
+    expect(b1).toContain(statuses[0].champion);
+    expect(b2).toContain(statuses[1].champion);
+    for (const m of cfg.sched) {
+      const home = b1.includes(m.a.g[0]) ? b1 : b2;
+      expect(home).toContain(m.b.g[0]);
+      if (m.ref) expect(home).toContain(m.ref); // refs never cross brackets
+    }
+    const bks = eventBrackets(cfg);
+    expect(calcPlacements(cfg, res, bks[0]).map((p) => p.id).sort()).toEqual([...b1].sort());
+    expect(calcPlacements(cfg, res, bks[1]).map((p) => p.id).sort()).toEqual([...b2].sort());
+  });
+
+  it("legacy single-bracket events (cfg.seeds, unprefixed ids) still resolve", () => {
+    const groups = seeds4.map((id) => ({ id, name: id.toUpperCase(), players: [] }));
+    let cfg = baseCfg({
+      format: "teams", groups, courts: 2, stage: "playoff",
+      seeds: [...seeds4], po: { g12: 21, g3: 15 },
+    });
+    delete cfg.brackets;
+    const res = {};
+    let adv = advanceBracket(cfg, res);
+    expect(adv.error).toBeUndefined();
+    cfg = adv.cfg;
+    expect(cfg.sched.map((m) => m.id).sort()).toEqual(["w1s1", "w1s2"]); // no prefix
+    let guard = 0;
+    while (guard++ < 30) {
+      for (const m of cfg.sched.filter((m) => m.br && !matchDone(m, res)))
+        winSeries(res, m, m.a.g[0]);
+      const a2 = advanceBracket(cfg, res);
+      if (a2.error) break;
+      cfg = a2.cfg;
+    }
+    const [bs] = bracketStatus(cfg, res);
+    expect(bs.champion).toBeTruthy();
+    expect(calcPlacements(cfg, res, eventBrackets(cfg)[0])).toHaveLength(4);
+  });
+
+  it("startPlayoffs rejects undersized brackets and unknown ids", () => {
     const cfg = poCfg();
-    expect(startPlayoffs(cfg, {}, { seeds: ["t1"], po: {} }).error).toBeTruthy();
-    expect(startPlayoffs(cfg, {}, { seeds: ["t1", "t1", "ghost"], po: {} }).error).toBeTruthy();
+    expect(startPlayoffs(cfg, {}, { brackets: [["t1"]], po: {} }).error).toBeTruthy();
+    expect(startPlayoffs(cfg, {}, { brackets: [["t1", "t1", "ghost"]], po: {} }).error).toBeTruthy();
+    expect(startPlayoffs(cfg, {}, { brackets: [seeds4, ["t9"]], po: {} }).error).toBeTruthy();
+    expect(startPlayoffs(cfg, {}, { brackets: [], po: {} }).error).toBeTruthy();
   });
 });
 
@@ -650,13 +775,12 @@ describe("ref assignments", () => {
     const groups = Array.from({ length: 6 }, (_, i) => ({ id: "t" + i, name: "T" + i, players: [] }));
     const cfg = startPlayoffs(
       baseCfg({ format: "teams", groups, courts: 3, stage: "pool", seeds: [], po: {} }),
-      {}, { seeds: groups.map((g) => g.id), po: {} }
+      {}, { brackets: [groups.map((g) => g.id)], po: {} }
     ).cfg;
     // seeds t0,t1 have byes; the two real matches get t1 first, t0 only as last resort
     expect(cfg.sched.map((m) => m.ref).sort()).toEqual(["t0", "t1"]);
     expect(cfg.sched[0].ref).toBe("t1");
   });
-});
 
   it("reffing is best-effort: matches still post when nobody is free", () => {
     // 2-team bracket: no third team exists, ever
@@ -664,20 +788,21 @@ describe("ref assignments", () => {
     const res = {};
     let cfg = startPlayoffs(
       baseCfg({ format: "teams", groups, courts: 1, stage: "pool", seeds: [], po: {} }),
-      res, { seeds: ["x", "y"], po: {} }
+      res, { brackets: [["x", "y"]], po: {} }
     ).cfg;
     expect(cfg.sched).toHaveLength(1);
     expect(cfg.sched[0].ref).toBeUndefined(); // no whistle, no problem
     winSeries(res, cfg.sched[0], "x");
     cfg = advanceBracket(cfg, res).cfg; // 2-team double elim: gf is the rematch
-    const gf = cfg.sched.find((m) => m.id === "gf");
+    const gf = cfg.sched.find((m) => m.id === "b1gf");
     expect(gf).toBeTruthy();
     expect(gf.ref).toBeUndefined();
     winSeries(res, gf, "x");
-    expect(bracketStatus(cfg, res).champion).toBe("x");
-    expect(calcPlacements(cfg, res).map((p) => p.id)).toEqual(["x", "y"]);
+    expect(bracketStatus(cfg, res)[0].champion).toBe("x");
+    expect(calcPlacements(cfg, res, eventBrackets(cfg)[0]).map((p) => p.id)).toEqual(["x", "y"]);
     // 2-team pool: same story
     const pool = genPoolPlay(baseCfg({ format: "teams", groups, pools: 1, courts: 1 }));
     expect(pool.sched).toHaveLength(1);
     expect(pool.sched[0].ref).toBeUndefined();
   });
+});

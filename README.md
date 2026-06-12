@@ -24,14 +24,18 @@ carry no phone at all (the director proxy-registers them).
    fairness (most-benched players go in first), small-group fallback
    shrinks team size instead of skipping a round.
 
-Tournament-day realities the flow is built around: multiple levels run as
-separate events (separate codes); the playoff **seeding screen is
-editable** — reorder seeds, pull a team that moved up a level, add one
-that moved down — because divisions get rebalanced after pool play. A
-"straight to bracket" option at lock-in supports day-two divisions that
-are hand-seeded off day-one results. Rally vs sideout scoring needs no
-app support — final scores are final scores. Mid-*bracket* roster changes
-are deliberately unsupported (they would corrupt double-elim routing).
+Tournament-day realities the flow is built around: **one event hosts the
+whole tournament** — players state a level at signup (Open/AA/A/BB/B/Rec),
+the director splits teams into up to six pool-play groups (auto-grouped
+by level, strongest in pool A, tap to override), and the playoff screen
+seeds **any number of brackets**: change the bracket count day-of (3
+divisions of pool play → 2 or 4 playoff brackets), move teams between
+divisions, drop a team that left, add one that walked over — all before
+anything locks. A "straight to brackets" option at lock-in supports
+day-two divisions hand-seeded off day-one results. Rally vs sideout
+scoring needs no app support — final scores are final scores.
+Mid-*bracket* roster changes are deliberately unsupported (they would
+corrupt double-elim routing).
 
 **Self-reffing is scheduled in** (`m.ref`, teams format): pool matches are
 reffed by the bye team when there is one, otherwise by a team from the
@@ -78,15 +82,17 @@ events/{CODE}                    the event config doc
   name, format ('teams'|'pairs'|'mix'), teamSize, courts, pointsTo, pin,
   status ('signup'|'live'|'done'), created, roster, groups, sched, rds,
   mseq, byes, sit, inact, sat,
-  stage (''|'pool'|'playoff'), pools (1|2), poolGames (1|2),
-  seeds [groupId…], po { g12, g3 }       ← playoff config (teams format)
-events/{CODE}/regs/{autoId}      { name, extra, ts }
+  stage (''|'pool'|'playoff'), pools (1–6), poolGames (1|2),
+  brackets [{pfx, name, seeds}…], po { g12, g3 }   ← playoffs (teams)
+  seeds [groupId…]                ← legacy single-bracket events only
+events/{CODE}/regs/{autoId}      { name, extra, lvl?, ts }
 events/{CODE}/results/{matchId}  { a, b, ts }
 ```
 
-Bracket matches use deterministic ids (`w1s2`, `l3s1`, `gf`, `gf2`) and
-best-of-3 series store **one result doc per game** (`w1s2g1`…`w1s2g3`),
-so the results schema never changes shape.
+Bracket matches use deterministic ids prefixed per bracket (`b2w1s2`,
+`b1gf`, `b3gf2`; legacy events unprefixed), and best-of-3 series store
+**one result doc per game** (`b1w1s2g1`…), so the results schema never
+changes shape.
 
 Conventions (documented, not enforced):
 

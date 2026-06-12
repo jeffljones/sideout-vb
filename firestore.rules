@@ -37,11 +37,12 @@ service cloud.firestore {
         && d.sit is map
         && d.inact is list && d.inact.size() <= 200
         && d.sat is map
-        // playoff fields (optional: events created before playoffs lack them)
+        // playoff/division fields (optional: older events lack them)
         && (!('stage' in d) || d.stage in ['', 'pool', 'playoff'])
-        && (!('pools' in d) || (d.pools is int && d.pools >= 1 && d.pools <= 2))
+        && (!('pools' in d) || (d.pools is int && d.pools >= 1 && d.pools <= 6))
         && (!('poolGames' in d) || (d.poolGames is int && d.poolGames >= 1 && d.poolGames <= 2))
         && (!('seeds' in d) || (d.seeds is list && d.seeds.size() <= 200))
+        && (!('brackets' in d) || (d.brackets is list && d.brackets.size() <= 6))
         && (!('po' in d) || d.po is map);
     }
 
@@ -63,12 +64,14 @@ service cloud.firestore {
 
       match /regs/{regId} {
         allow read: if true;
-        allow create: if request.resource.data.keys().hasOnly(['name', 'extra', 'ts'])
+        allow create: if request.resource.data.keys().hasOnly(['name', 'extra', 'lvl', 'ts'])
           && request.resource.data.name is string
           && request.resource.data.name.size() >= 1
           && request.resource.data.name.size() <= 24
           && request.resource.data.extra is string
           && request.resource.data.extra.size() <= 24
+          && (!('lvl' in request.resource.data)
+            || request.resource.data.lvl in ['Open', 'AA', 'A', 'BB', 'B', 'Rec'])
           && request.resource.data.ts is int;
         allow delete: if true;
       }

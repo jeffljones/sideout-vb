@@ -25,10 +25,13 @@ const evDoc = (code) => doc(db, "events", code);
 const regsCol = (code) => collection(db, "events", code, "regs");
 const resultsCol = (code) => collection(db, "events", code, "results");
 
-// Older event docs predate the playoff fields; fill the defaults so the
-// UI and engine can rely on them.
+// Older event docs predate the playoff/division fields; fill the defaults
+// so the UI and engine can rely on them. Events that started a playoff
+// before multi-bracket support keep working via cfg.seeds (the engine
+// normalizes that to one bracket with unprefixed match ids).
 const normalizeCfg = (d) => ({
-  stage: "", pools: 1, poolGames: 1, seeds: [], po: { g12: 21, g3: 15 },
+  stage: "", pools: 1, poolGames: 1, seeds: [], brackets: [],
+  po: { g12: 21, g3: 15 },
   ...d,
 });
 
@@ -88,8 +91,11 @@ export async function deleteEvent(code) {
 }
 
 /* ---------------------- registrations ---------------------- */
-export async function register(code, name, extra) {
-  await addDoc(regsCol(code), { name, extra: extra || "", ts: Date.now() });
+export async function register(code, name, extra, lvl) {
+  await addDoc(regsCol(code), {
+    name, extra: extra || "", ts: Date.now(),
+    ...(lvl ? { lvl } : {}),
+  });
 }
 
 export async function removeReg(code, regId) {

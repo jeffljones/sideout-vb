@@ -255,8 +255,10 @@ export function buildTeams(roster, regs, teamSize) {
   const byName = new Map(roster.map((r) => [r.name.toLowerCase(), r.id]));
   const named = new Map(); // teamname(lc) -> {label, players}
   const claimed = new Set();
+  const lvlOf = new Map(); // pid -> requested level
   for (const reg of regs) {
     const pid = byName.get(reg.name.toLowerCase());
+    if (pid && reg.lvl) lvlOf.set(pid, reg.lvl);
     if (!pid || !reg.extra) continue;
     const key = reg.extra.toLowerCase();
     if (!named.has(key)) named.set(key, { label: reg.extra, players: [] });
@@ -265,7 +267,15 @@ export function buildTeams(roster, regs, teamSize) {
       claimed.add(pid);
     }
   }
-  const groups = [...named.values()].map((t) => ({ id: uid(), name: t.label, players: t.players }));
+  // a team's level: first member with a stated one
+  const teamLvl = (players) => {
+    for (const pid of players) if (lvlOf.has(pid)) return lvlOf.get(pid);
+    return "";
+  };
+  const groups = [...named.values()].map((t) => {
+    const lvl = teamLvl(t.players);
+    return { id: uid(), name: t.label, players: t.players, ...(lvl ? { lvl } : {}) };
+  });
   const rest = shuffle(roster.map((r) => r.id).filter((pid) => !claimed.has(pid)));
   // top up short named teams first
   for (const g of groups) while (g.players.length < teamSize && rest.length) g.players.push(rest.shift());
@@ -277,7 +287,8 @@ export function buildTeams(roster, regs, teamSize) {
       // don't strand one player on a team of one; ties go to auto-formed teams, not named ones
       groups.reduce((sm, g) => (g.players.length < sm.players.length ? g : sm), groups[groups.length - 1]).players.push(chunk[0]);
     } else {
-      groups.push({ id: uid(), name: "Team " + letters[li++ % 26], players: chunk });
+      const lvl = teamLvl(chunk);
+      groups.push({ id: uid(), name: "Team " + letters[li++ % 26], players: chunk, ...(lvl ? { lvl } : {}) });
     }
   }
   return groups;
@@ -322,18 +333,22 @@ function circleRounds(ids) {
   return rounds;
 }
 
-// Round robin within each pool, merged round-by-round. poolGames=2 emits
-// each matchup twice, back to back on the same court (sharing one ref).
-// Every match gets a ref from its own pool: the bye team when there is
-// one, otherwise a team from the round's other matchup — on a single net
-// the other matchup is waiting courtside anyway. Duty balances over the day.
+// Round robin within each pool (1..6 pools), merged round-by-round.
+// poolGames=2 emits each matchup twice, back to back on the same court
+// (sharing one ref). Every match gets a ref from its own pool: the bye
+// team when there is one, otherwise a team from the round's other matchup
+// — on a single net the other matchup is waiting courtside anyway. Duty
+// balances over the day. Best-effort: 2-team pools have no ref.
 export function genPoolPlay(cfg) {
-  const pools = cfg.pools === 2 ? 2 : 1;
+  const nPools = Math.max(1, cfg.pools || 1);
   const games = cfg.poolGames === 2 ? 2 : 1;
-  const byPool = [[], []];
-  for (const g of cfg.groups) byPool[pools === 2 && g.pool === 2 ? 1 : 0].push(g.id);
-  const roundLists = [circleRounds(byPool[0]), pools === 2 ? circleRounds(byPool[1]) : []];
-  const rds = Math.max(roundLists[0].length, roundLists[1].length);
+  const byPool = Array.from({ length: nPools }, () => []);
+  for (const g of cfg.groups) {
+    const p = Math.min(nPools, Math.max(1, g.pool || 1));
+    byPool[p - 1].push(g.id);
+  }
+  const roundLists = byPool.map((ids) => circleRounds(ids));
+  const rds = Math.max(...roundLists.map((r) => r.length), 0);
   const sched = [];
   const byes = {};
   const refCount = {};
@@ -359,7 +374,7 @@ export function genPoolPlay(cfg) {
           sched.push({
             id: "m" + ++seq, rd, ct,
             a: { g: [x] }, b: { g: [y] },
-            ...(pools === 2 ? { pl: pi + 1 } : {}),
+            ...(nPools > 1 ? { pl: pi + 1 } : {}),
             ...(ref ? { ref } : {}),
           });
         }
@@ -401,9 +416,14 @@ export function getGameTarget(cfg, m, gi) {
 }
 
 /* ---------------------- bracket structure ---------------------- */
-// All potential matches for a seeded double-elim bracket, in dependency
+// An event can run several playoff brackets (divisions). Each bracket is
+// { pfx, name, seeds }: pfx prefixes every match id ('b2w1s1', 'b2gf'),
+// name is the display letter, seeds is the team order. Legacy
+// single-bracket events normalize to one bracket with pfx ''.
+
+// All potential matches for one seeded double-elim bracket, in dependency
 // order. Sides reference seeds or winners/losers of earlier matches.
-export function buildBracket(seedIds) {
+export function buildBracket(seedIds, pfx = "") {
   const N = seedIds.length;
   const P = N <= 2 ? 2 : 2 ** Math.ceil(Math.log2(N));
   const R = Math.log2(P);
@@ -417,20 +437,20 @@ export function buildBracket(seedIds) {
   const specs = [];
   for (let s = 1; s <= P / 2; s++)
     specs.push({
-      id: `w1s${s}`, br: "w", brd: 1, bo: 3,
+      id: `${pfx}w1s${s}`, br: "w", brd: 1, bo: 3,
       a: { seed: seedAt(ord[2 * s - 2]) }, b: { seed: seedAt(ord[2 * s - 1]) },
     });
   for (let r = 2; r <= R; r++)
     for (let s = 1; s <= P / 2 ** r; s++)
       specs.push({
-        id: `w${r}s${s}`, br: "w", brd: r, bo: 3,
-        a: { w: `w${r - 1}s${2 * s - 1}` }, b: { w: `w${r - 1}s${2 * s}` },
+        id: `${pfx}w${r}s${s}`, br: "w", brd: r, bo: 3,
+        a: { w: `${pfx}w${r - 1}s${2 * s - 1}` }, b: { w: `${pfx}w${r - 1}s${2 * s}` },
       });
   if (R >= 2) {
     for (let s = 1; s <= P / 4; s++)
       specs.push({
-        id: `l1s${s}`, br: "l", brd: 1, bo: 1,
-        a: { l: `w1s${2 * s - 1}` }, b: { l: `w1s${2 * s}` },
+        id: `${pfx}l1s${s}`, br: "l", brd: 1, bo: 1,
+        a: { l: `${pfx}w1s${2 * s - 1}` }, b: { l: `${pfx}w1s${2 * s}` },
       });
     for (let r = 2; r <= 2 * R - 2; r++) {
       const n = P / 2 ** (Math.ceil(r / 2) + 1);
@@ -441,39 +461,47 @@ export function buildBracket(seedIds) {
           const k = r / 2 + 1;
           const drop = k % 2 === 0 ? n - s + 1 : s;
           specs.push({
-            id: `l${r}s${s}`, br: "l", brd: r, bo: 1,
-            a: { w: `l${r - 1}s${s}` }, b: { l: `w${k}s${drop}` },
+            id: `${pfx}l${r}s${s}`, br: "l", brd: r, bo: 1,
+            a: { w: `${pfx}l${r - 1}s${s}` }, b: { l: `${pfx}w${k}s${drop}` },
           });
         } else {
           specs.push({
-            id: `l${r}s${s}`, br: "l", brd: r, bo: 1,
-            a: { w: `l${r - 1}s${2 * s - 1}` }, b: { w: `l${r - 1}s${2 * s}` },
+            id: `${pfx}l${r}s${s}`, br: "l", brd: r, bo: 1,
+            a: { w: `${pfx}l${r - 1}s${2 * s - 1}` }, b: { w: `${pfx}l${r - 1}s${2 * s}` },
           });
         }
       }
     }
   }
   specs.push({
-    id: "gf", br: "gf", brd: 1, bo: 3,
-    a: { w: `w${R}s1` },
-    b: R >= 2 ? { w: `l${2 * R - 2}s1` } : { l: "w1s1" },
+    id: `${pfx}gf`, br: "gf", brd: 1, bo: 3,
+    a: { w: `${pfx}w${R}s1` },
+    b: R >= 2 ? { w: `${pfx}l${2 * R - 2}s1` } : { l: `${pfx}w1s1` },
   });
-  specs.push({ id: "gf2", br: "gf2", brd: 1, bo: 1, a: { w: "gf" }, b: { l: "gf" } });
+  specs.push({ id: `${pfx}gf2`, br: "gf2", brd: 1, bo: 1, a: { w: `${pfx}gf` }, b: { l: `${pfx}gf` } });
   return specs;
 }
 
-export function bracketLabel(sp, R) {
-  if (sp.br === "w") return sp.brd === R ? "WINNERS FINAL" : `WINNERS R${sp.brd}`;
-  if (sp.br === "l") return sp.brd === 2 * R - 2 ? "LOSERS FINAL" : `LOSERS R${sp.brd}`;
-  if (sp.br === "gf2") return "DECIDING GAME";
-  return "GRAND FINAL";
+export function bracketLabel(sp, R, name = "") {
+  const tag = name ? `${name} · ` : "";
+  if (sp.br === "w") return tag + (sp.brd === R ? "WINNERS FINAL" : `WINNERS R${sp.brd}`);
+  if (sp.br === "l") return tag + (sp.brd === 2 * R - 2 ? "LOSERS FINAL" : `LOSERS R${sp.brd}`);
+  if (sp.br === "gf2") return tag + "DECIDING GAME";
+  return tag + "GRAND FINAL";
 }
 
-// Resolves every bracket slot from seeds + results. Sides are a team id,
-// null (bye), or undefined (not yet determined). status: 'pending' |
-// 'bye' (auto-advance, no match played) | 'ready' | 'done'.
-export function resolveBracket(cfg, res) {
-  const specs = buildBracket(cfg.seeds || []);
+// The brackets list, with legacy single-bracket events normalized.
+export function eventBrackets(cfg) {
+  if (cfg.brackets && cfg.brackets.length) return cfg.brackets;
+  if (cfg.seeds && cfg.seeds.length) return [{ pfx: "", name: "", seeds: cfg.seeds }];
+  return [];
+}
+
+// Resolves every slot of one bracket from seeds + results. Sides are a
+// team id, null (bye), or undefined (not yet determined). status:
+// 'pending' | 'bye' (auto-advance) | 'ready' | 'done'.
+export function resolveBracket(cfg, res, bracket) {
+  const specs = buildBracket(bracket.seeds || [], bracket.pfx || "");
   const state = new Map();
   const side = (src) => {
     if ("seed" in src) return src.seed;
@@ -500,40 +528,49 @@ export function resolveBracket(cfg, res) {
     }
     state.set(sp.id, st);
   }
-  return { specs, state, R: Math.log2(cfg.seeds && cfg.seeds.length > 2 ? 2 ** Math.ceil(Math.log2(cfg.seeds.length)) : 2) };
+  const N = (bracket.seeds || []).length;
+  const R = Math.log2(N <= 2 ? 2 : 2 ** Math.ceil(Math.log2(N)));
+  return { specs, state, R };
 }
 
+// Per-bracket progress: [{ pfx, name, seeds, gfDone, gfWonByLB, gf2Done,
+// needsReset, champion, runnerUp }]
 export function bracketStatus(cfg, res) {
-  const { state } = resolveBracket(cfg, res);
-  const gf = state.get("gf"), gf2 = state.get("gf2");
   const inSched = (id) => cfg.sched.some((m) => m.id === id);
-  const gfDone = gf && gf.status === "done";
-  const gfWonByLB = gfDone && gf.winner === gf.bId;
-  const gf2Done = gf2 && gf2.status === "done";
-  return {
-    gfDone, gfWonByLB, gf2Done,
-    needsReset: gfDone && gfWonByLB && !inSched("gf2"),
-    champion: gf2Done ? gf2.winner : gfDone ? gf.winner : null,
-    runnerUp: gf2Done ? gf2.loser : gfDone ? gf.loser : null,
-  };
+  return eventBrackets(cfg).map((bk) => {
+    const { state } = resolveBracket(cfg, res, bk);
+    const gf = state.get(`${bk.pfx}gf`), gf2 = state.get(`${bk.pfx}gf2`);
+    const gfDone = gf && gf.status === "done";
+    const gfWonByLB = gfDone && gf.winner === gf.bId;
+    const gf2Done = gf2 && gf2.status === "done";
+    return {
+      pfx: bk.pfx, name: bk.name || "", seeds: bk.seeds,
+      gfDone, gfWonByLB, gf2Done,
+      needsReset: gfDone && gfWonByLB && !inSched(`${bk.pfx}gf2`),
+      champion: gf2Done ? gf2.winner : gfDone ? gf.winner : null,
+      runnerUp: gf2Done ? gf2.loser : gfDone ? gf.loser : null,
+    };
+  });
 }
 
-// Refs for a batch of new bracket matches. Losing teams ref the next
-// game: the most recently beaten free team gets the whistle, then earlier
-// losers, alive-but-idle teams last. The first round uses the bye teams,
-// worst seed first — the top seed gets a pass unless they're the only
-// option. If every team is on a court, borrow from another match in the
-// batch (single-net flow: the other match is waiting beside the court).
-function assignBracketRefs(cfg, res, matches) {
-  const seeds = cfg.seeds || [];
+// Refs for a batch of new matches in one bracket. Losing teams ref the
+// next game: the most recently beaten free team gets the whistle, then
+// earlier losers, alive-but-idle teams last. The first batch uses the bye
+// teams, worst seed first — the top seed gets a pass unless they are the
+// only option. If every team is on a court, borrow from another match in
+// the batch. Best-effort: a match without a candidate just has no ref.
+function assignBracketRefs(cfg, res, bracket, matches) {
+  const seeds = bracket.seeds || [];
   const seedRank = new Map(seeds.map((g, i) => [g, i]));
   const playing = new Set(matches.flatMap((m) => [m.a.g[0], m.b.g[0]]));
   const refCount = {};
   const lastLoss = new Map();
   let anyBracket = false;
+  const mine = (id) => id.startsWith(bracket.pfx || "") &&
+    (bracket.pfx || /^(w|l|gf)/.test(id)); // legacy pfx '' owns unprefixed ids
   for (const m of cfg.sched) {
     if (m.ref) refCount[m.ref] = (refCount[m.ref] || 0) + 1;
-    if (!m.br) continue;
+    if (!m.br || !mine(m.id)) continue;
     anyBracket = true;
     const s = seriesScore(m, res);
     if (!s.done) continue;
@@ -569,83 +606,119 @@ function assignBracketRefs(cfg, res, matches) {
   }
 }
 
-// Creates every newly-determined bracket match (never the deciding game —
-// that's genResetFinal, by director discretion).
+// Creates every newly-determined match across all brackets (never a
+// deciding game — that is genResetFinal, by director discretion).
 export function advanceBracket(cfg, res) {
   if (cfg.stage !== "playoff") return { cfg, error: "Start the playoffs first." };
-  const { specs, state, R } = resolveBracket(cfg, res);
   const have = new Set(cfg.sched.map((m) => m.id));
-  const toCreate = specs.filter(
-    (sp) => sp.id !== "gf2" && state.get(sp.id).status === "ready" && !have.has(sp.id)
-  );
-  if (toCreate.length === 0) {
+  const rd = (cfg.rds || 0) + 1;
+  const created = [];
+  let courtIdx = 0;
+  for (const bk of eventBrackets(cfg)) {
+    const { specs, state, R } = resolveBracket(cfg, res, bk);
+    const toCreate = specs.filter(
+      (sp) => sp.id !== `${bk.pfx}gf2` && state.get(sp.id).status === "ready" && !have.has(sp.id)
+    );
+    if (!toCreate.length) continue;
+    const matches = toCreate.map((sp) => ({
+      id: sp.id, rd, ct: (courtIdx++ % cfg.courts) + 1,
+      a: { g: [state.get(sp.id).aId] }, b: { g: [state.get(sp.id).bId] },
+      br: sp.br, brd: sp.brd, bo: sp.bo, lbl: bracketLabel(sp, R, bk.name),
+    }));
+    assignBracketRefs(cfg, res, bk, matches);
+    created.push(...matches);
+  }
+  if (created.length === 0) {
     const bs = bracketStatus(cfg, res);
-    if (bs.needsReset)
-      return { cfg, error: "Losers-bracket team won the grand final — generate the deciding game, or end the event to let it stand." };
-    if (bs.champion)
-      return { cfg, error: "Bracket is complete — end the event to post final standings." };
+    const reset = bs.find((b) => b.needsReset);
+    if (reset)
+      return { cfg, error: `Losers-bracket team won the ${reset.name ? reset.name + " " : ""}grand final — generate the deciding game, or end the event to let it stand.` };
+    if (bs.length && bs.every((b) => b.champion))
+      return { cfg, error: "All brackets are complete — end the event to post final standings." };
     return { cfg, error: "Nothing new to post — finish the matches on the board." };
   }
-  const rd = (cfg.rds || 0) + 1;
-  const matches = toCreate.map((sp, i) => ({
-    id: sp.id, rd, ct: (i % cfg.courts) + 1,
-    a: { g: [state.get(sp.id).aId] }, b: { g: [state.get(sp.id).bId] },
-    br: sp.br, brd: sp.brd, bo: sp.bo, lbl: bracketLabel(sp, R),
-  }));
-  assignBracketRefs(cfg, res, matches);
-  return { cfg: { ...cfg, sched: [...cfg.sched, ...matches], rds: rd } };
+  return { cfg: { ...cfg, sched: [...cfg.sched, ...created], rds: rd } };
 }
 
-export function genResetFinal(cfg, res) {
-  const bs = bracketStatus(cfg, res);
-  if (!bs.needsReset) return { cfg, error: "No deciding game is needed." };
-  const { state } = resolveBracket(cfg, res);
-  const gf = state.get("gf");
+export function genResetFinal(cfg, res, pfx = "") {
+  const bk = eventBrackets(cfg).find((b) => (b.pfx || "") === pfx);
+  if (!bk) return { cfg, error: "No such bracket." };
+  const bs = bracketStatus(cfg, res).find((b) => (b.pfx || "") === pfx);
+  if (!bs || !bs.needsReset) return { cfg, error: "No deciding game is needed." };
+  const { state } = resolveBracket(cfg, res, bk);
+  const gf = state.get(`${pfx}gf`);
   const rd = (cfg.rds || 0) + 1;
   const m = {
-    id: "gf2", rd, ct: 1,
+    id: `${pfx}gf2`, rd, ct: 1,
     a: { g: [gf.winner] }, b: { g: [gf.loser] },
-    br: "gf2", brd: 1, bo: 1, lbl: "DECIDING GAME",
+    br: "gf2", brd: 1, bo: 1, lbl: bracketLabel({ br: "gf2" }, 1, bk.name),
   };
-  assignBracketRefs(cfg, res, [m]);
+  assignBracketRefs(cfg, res, bk, [m]);
   return { cfg: { ...cfg, sched: [...cfg.sched, m], rds: rd } };
 }
 
-/* ---------------------- seeding & placements ---------------------- */
-// Pool standings order; with two pools, cross-seeded A1,B1,A2,B2,…
-export function seedFromStandings(cfg, res) {
-  const rows = calcStandings(cfg, res);
-  if (cfg.pools !== 2) return rows.map((r) => r.id);
-  const byPool = [[], []];
+/* ---------------------- levels, seeding & placements ---------------------- */
+export const LEVELS = ["Open", "AA", "A", "BB", "B", "Rec"];
+export const lvlRank = (lvl) => {
+  const i = LEVELS.indexOf(lvl);
+  return i === -1 ? LEVELS.length : i;
+};
+export const poolName = (p) => String.fromCharCode(64 + p); // 1→A, 2→B…
+
+// Spread teams across nPools by level (strongest levels in pool A),
+// contiguous chunks as even as possible. Returns groups with .pool set.
+export function autoAssignPools(groups, nPools) {
+  const sorted = [...groups].sort((x, y) =>
+    lvlRank(x.lvl) - lvlRank(y.lvl) || x.name.localeCompare(y.name));
+  const per = Math.ceil(sorted.length / nPools);
+  const poolOf = new Map(sorted.map((g, i) => [g.id, Math.min(nPools, Math.floor(i / per) + 1)]));
+  return groups.map((g) => ({ ...g, pool: nPools > 1 ? poolOf.get(g.id) : 1 }));
+}
+
+// Seed order for one bracket's teams: per-pool standings rank, pools
+// interleaved (A1, B1, A2, B2…) so same-pool rematches come late.
+export function seedBracket(cfg, res, teamIds) {
+  const member = new Set(teamIds);
+  const rows = calcStandings(cfg, res).filter((r) => member.has(r.id));
+  const byPool = new Map();
   for (const r of rows) {
-    const g = groupOf(cfg, r.id);
-    byPool[g && g.pool === 2 ? 1 : 0].push(r.id);
+    const p = (groupOf(cfg, r.id) || {}).pool || 1;
+    if (!byPool.has(p)) byPool.set(p, []);
+    byPool.get(p).push(r.id);
   }
+  const lists = [...byPool.entries()].sort((x, y) => x[0] - y[0]).map(([, l]) => l);
   const out = [];
-  for (let i = 0; i < Math.max(byPool[0].length, byPool[1].length); i++) {
-    if (byPool[0][i]) out.push(byPool[0][i]);
-    if (byPool[1][i]) out.push(byPool[1][i]);
-  }
+  for (let i = 0; i < Math.max(...lists.map((l) => l.length), 0); i++)
+    for (const l of lists) if (l[i]) out.push(l[i]);
   return out;
 }
 
-export function startPlayoffs(cfg, res, { seeds, po }) {
-  const uniq = [...new Set(seeds)].filter((gid) => groupOf(cfg, gid));
-  if (uniq.length < 2) return { cfg, error: "Need at least 2 teams in the bracket." };
+// brackets: array of team-id arrays (seed order), one per playoff bracket.
+// Empty input brackets are skipped; a non-empty bracket that validates to
+// fewer than 2 real teams is an error, never a silent drop.
+export function startPlayoffs(cfg, res, { brackets, po }) {
+  const input = (brackets || []).filter((seeds) => (seeds || []).length > 0);
+  const lists = input.map((seeds) => [...new Set(seeds)].filter((gid) => groupOf(cfg, gid)));
+  if (!lists.length || lists.some((seeds) => seeds.length < 2))
+    return { cfg, error: "Every bracket needs at least 2 teams." };
+  const named = lists.map((seeds, i) => ({
+    pfx: `b${i + 1}`,
+    name: lists.length > 1 ? poolName(i + 1) : "",
+    seeds,
+  }));
   const next = {
-    ...cfg, stage: "playoff", seeds: uniq,
+    ...cfg, stage: "playoff", brackets: named, seeds: [],
     po: { g12: (po && po.g12) || 21, g3: (po && po.g3) || 15 },
   };
   return advanceBracket(next, res);
 }
 
-// Final placement order: champion, runner-up, then by how deep each team
-// survived; ties broken by seed. Sensible mid-bracket too (used the moment
-// the director ends the event).
-export function calcPlacements(cfg, res) {
-  const { specs, state } = resolveBracket(cfg, res);
-  const bs = bracketStatus(cfg, res);
-  const seeds = cfg.seeds || [];
+// Final placement order for one bracket: champion, runner-up, then by how
+// deep each team survived; ties broken by seed. Sensible mid-bracket too.
+export function calcPlacements(cfg, res, bracket) {
+  const { specs, state } = resolveBracket(cfg, res, bracket);
+  const bs = bracketStatus(cfg, res).find((b) => (b.pfx || "") === (bracket.pfx || ""));
+  const seeds = bracket.seeds || [];
   const score = new Map(seeds.map((gid, i) => [gid, { depth: 0, out: false, seed: i }]));
   specs.forEach((sp, idx) => {
     const st = state.get(sp.id);
