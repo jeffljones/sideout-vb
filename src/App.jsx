@@ -329,6 +329,11 @@ function MatchCard({ cfg, match, result, series, onTap, highlightIds }) {
           <Side side={match.b} score={done ? result.b : null} win={done && !aWin} />
         </>
       )}
+      {match.ref && !done && (
+        <div style={{ fontFamily: MONO, fontSize: 12, color: C.dim, marginTop: 6, letterSpacing: "0.04em" }}>
+          REF · {groupLabel(cfg, match.ref)}
+        </div>
+      )}
     </div>
   );
 }
@@ -1160,6 +1165,15 @@ export default function App() {
         </Card>
       );
     }
+    // per-court now/next strip so courts never sit idle waiting for word
+    const upNext = [];
+    if (cfg.status === "live") {
+      for (let ct = 1; ct <= cfg.courts; ct++) {
+        const q = cfg.sched.filter((m) => m.ct === ct && !matchDone(m, res));
+        if (q.length) upNext.push({ ct, now: q[0], next: q[1] });
+      }
+    }
+    const vsLine = (m) => `${sideLabel(cfg, m.a)} vs ${sideLabel(cfg, m.b)}`;
     // group pool matches by round, bracket matches by their stage label;
     // newest group on top (matches the old newest-round-first ordering)
     const groups = [];
@@ -1175,6 +1189,28 @@ export default function App() {
     groups.sort((x, y) => y.order - x.order);
     return (
       <div>
+        {upNext.length > 0 && (
+          <Card style={{ marginBottom: 16, padding: 12, background: "#FBF3E4" }}>
+            <Eyebrow style={{ marginBottom: 8 }}>Up next by court</Eyebrow>
+            {upNext.map(({ ct, now, next }) => (
+              <div key={ct} style={{ display: "flex", gap: 10, padding: "7px 2px", borderBottom: `1.5px dashed ${C.line}`, alignItems: "baseline" }}>
+                <CourtBadge n={ct} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>
+                    {vsLine(now)}
+                    {now.ref && <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim }}> · ref {groupLabel(cfg, now.ref)}</span>}
+                  </div>
+                  {next && (
+                    <div style={{ fontSize: 12.5, color: C.dim, marginTop: 2 }}>
+                      then: {vsLine(next)}
+                      {next.ref && <span style={{ fontFamily: MONO, fontSize: 11 }}> · ref {groupLabel(cfg, next.ref)}</span>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </Card>
+        )}
         {groups.map((grp) => {
           const byes = grp.rd != null ? (cfg.byes || {})[grp.rd] || [] : [];
           const sit = grp.rd != null ? (cfg.sit || {})[grp.rd] || [] : [];

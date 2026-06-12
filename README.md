@@ -33,6 +33,15 @@ are hand-seeded off day-one results. Rally vs sideout scoring needs no
 app support — final scores are final scores. Mid-*bracket* roster changes
 are deliberately unsupported (they would corrupt double-elim routing).
 
+**Self-reffing is scheduled in** (`m.ref`, teams format): pool matches are
+reffed by the bye team when there is one, otherwise by a team from the
+round's other matchup, balanced across the day (played-twice matchups
+share one ref). In the bracket, the losing team refs the next game — the
+most recently beaten free team gets the whistle; round one uses the bye
+teams, worst seed first, and the top seed is spared first-game duty
+unless they're the only option. The Schedule tab shows a per-court
+**now / next strip** with refs so courts never idle.
+
 ## Stack
 
 - **Vite + React 18**, plain JavaScript, single-page app (`src/App.jsx`).

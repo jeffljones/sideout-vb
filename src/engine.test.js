@@ -466,6 +466,10 @@ describe("double-elim bracket", () => {
     expect(r1[1].a.g[0]).toBe("t2"); expect(r1[1].b.g[0]).toBe("t3");
     expect(r1[0].bo).toBe(3);
     expect(r1[0].lbl).toBe("WINNERS R1");
+    // full first round, nobody free: refs borrowed from the other matchup,
+    // worst seeds first, top seed spared
+    expect(r1[0].ref).toBe("t3");
+    expect(r1[1].ref).toBe("t4");
     winSeries(res, r1[0], "t1");
     winSeries(res, r1[1], "t2");
     cfg = advanceBracket(cfg, res).cfg;
@@ -481,12 +485,14 @@ describe("double-elim bracket", () => {
     const lf = cfg.sched.find((m) => m.id === "l2s1");
     expect(lf.lbl).toBe("LOSERS FINAL");
     expect([lf.a.g[0], lf.b.g[0]].sort()).toEqual(["t2", "t3"]);
+    expect(lf.ref).toBe("t4"); // just lost the losers-bracket game → refs the next one
     winSeries(res, lf, "t3");
     cfg = advanceBracket(cfg, res).cfg;
     const gf = cfg.sched.find((m) => m.id === "gf");
     expect(gf.lbl).toBe("GRAND FINAL");
     expect(gf.bo).toBe(3);
     expect([gf.a.g[0], gf.b.g[0]]).toEqual(["t1", "t3"]);
+    expect(gf.ref).toBe("t2"); // most recently beaten team gets the whistle
     winSeries(res, gf, "t1"); // WB champ holds — no reset
     const bs = bracketStatus(cfg, res);
     expect(bs.needsReset).toBe(false);
@@ -515,6 +521,8 @@ describe("double-elim bracket", () => {
     const gf2 = cfg.sched.find((m) => m.id === "gf2");
     expect(gf2.bo).toBe(1);
     expect(gf2.lbl).toBe("DECIDING GAME");
+    expect(gf2.ref).toBeTruthy(); // an eliminated team refs the decider
+    expect([gf2.a.g[0], gf2.b.g[0]]).not.toContain(gf2.ref);
     winSeries(res, gf2, gf2.b.g[0]); // WB champ wins the extra game after all
     bs = bracketStatus(cfg, res);
     expect(bs.needsReset).toBe(false);
@@ -555,6 +563,8 @@ describe("double-elim bracket", () => {
           expect(m.a.g[0]).not.toBe(m.b.g[0]);
           expect(m.ct).toBeGreaterThanOrEqual(1);
           expect(m.ct).toBeLessThanOrEqual(3);
+          expect(m.ref).toBeTruthy(); // every bracket match staffed (N ≥ 3)
+          expect([m.a.g[0], m.b.g[0]]).not.toContain(m.ref);
         }
         // losses: champion ≤1, everyone else exactly 2 (1 for the runner-up
         // when the bracket stands without the deciding game)
@@ -587,5 +597,63 @@ describe("double-elim bracket", () => {
     const cfg = poCfg();
     expect(startPlayoffs(cfg, {}, { seeds: ["t1"], po: {} }).error).toBeTruthy();
     expect(startPlayoffs(cfg, {}, { seeds: ["t1", "t1", "ghost"], po: {} }).error).toBeTruthy();
+  });
+});
+
+/* ---------------- ref assignments ---------------- */
+describe("ref assignments", () => {
+  it("pool play: ref from same pool, never a participant, duty balanced", () => {
+    const cfg = genPoolPlay(baseCfg({ format: "teams", groups: mkTeams(4), pools: 1, poolGames: 1, courts: 2 }));
+    const counts = {};
+    for (const m of cfg.sched) {
+      expect(m.ref).toBeTruthy();
+      expect([m.a.g[0], m.b.g[0]]).not.toContain(m.ref);
+      counts[m.ref] = (counts[m.ref] || 0) + 1;
+    }
+    const vals = Object.values(counts);
+    expect(Math.max(...vals) - Math.min(...vals)).toBeLessThanOrEqual(1);
+  });
+
+  it("pool play: the bye team refs, and played-twice matchups share one ref", () => {
+    const cfg3 = genPoolPlay(baseCfg({ format: "teams", groups: mkTeams(3), pools: 1, poolGames: 1, courts: 2 }));
+    for (const m of cfg3.sched) {
+      expect(m.ref).toBe(cfg3.byes[m.rd][0]); // odd pool: the resting team has the whistle
+    }
+    const cfg2x = genPoolPlay(baseCfg({ format: "teams", groups: mkTeams(4), pools: 1, poolGames: 2, courts: 2 }));
+    const byPair = new Map();
+    for (const m of cfg2x.sched) {
+      const k = pk(m.a.g[0], m.b.g[0]);
+      byPair.set(k, [...(byPair.get(k) || []), m.ref]);
+    }
+    for (const [, refs] of byPair) {
+      expect(refs).toHaveLength(2);
+      expect(refs[0]).toBe(refs[1]);
+    }
+  });
+
+  it("pool play: no team refs two matches in the same round; pools never share refs", () => {
+    const five = genPoolPlay(baseCfg({ format: "teams", groups: mkTeams(5), pools: 1, courts: 4 }));
+    for (let rd = 1; rd <= five.rds; rd++) {
+      const refs = five.sched.filter((m) => m.rd === rd).map((m) => m.ref).filter(Boolean);
+      expect(new Set(refs).size).toBe(refs.length);
+    }
+    const groups = mkTeams(8, true);
+    const two = genPoolPlay(baseCfg({ format: "teams", groups, pools: 2, courts: 4 }));
+    const poolOf = (gid) => groups.find((g) => g.id === gid).pool;
+    for (const m of two.sched) {
+      expect(m.ref).toBeTruthy();
+      expect(poolOf(m.ref)).toBe(m.pl);
+    }
+  });
+
+  it("bracket round 1: bye teams ref, worst seed first, top seed passes when possible", () => {
+    const groups = Array.from({ length: 6 }, (_, i) => ({ id: "t" + i, name: "T" + i, players: [] }));
+    const cfg = startPlayoffs(
+      baseCfg({ format: "teams", groups, courts: 3, stage: "pool", seeds: [], po: {} }),
+      {}, { seeds: groups.map((g) => g.id), po: {} }
+    ).cfg;
+    // seeds t0,t1 have byes; the two real matches get t1 first, t0 only as last resort
+    expect(cfg.sched.map((m) => m.ref).sort()).toEqual(["t0", "t1"]);
+    expect(cfg.sched[0].ref).toBe("t1");
   });
 });

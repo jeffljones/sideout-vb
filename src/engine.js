@@ -323,7 +323,10 @@ function circleRounds(ids) {
 }
 
 // Round robin within each pool, merged round-by-round. poolGames=2 emits
-// each matchup twice, back to back on the same court.
+// each matchup twice, back to back on the same court (sharing one ref).
+// Every match gets a ref from its own pool: the bye team when there is
+// one, otherwise a team from the round's other matchup — on a single net
+// the other matchup is waiting courtside anyway. Duty balances over the day.
 export function genPoolPlay(cfg) {
   const pools = cfg.pools === 2 ? 2 : 1;
   const games = cfg.poolGames === 2 ? 2 : 1;
@@ -333,6 +336,7 @@ export function genPoolPlay(cfg) {
   const rds = Math.max(roundLists[0].length, roundLists[1].length);
   const sched = [];
   const byes = {};
+  const refCount = {};
   let seq = cfg.mseq || 0;
   for (let r = 0; r < rds; r++) {
     const rd = r + 1;
@@ -341,13 +345,22 @@ export function genPoolPlay(cfg) {
       const round = rounds[r];
       if (!round) return;
       if (round.bye) byes[rd] = [...(byes[rd] || []), round.bye];
+      const usedThisRd = new Set();
       for (const [x, y] of round.pairs) {
         const ct = (courtIdx++ % cfg.courts) + 1;
+        const cands = byPool[pi]
+          .filter((t) => t !== x && t !== y && !usedThisRd.has(t))
+          .sort((a, b) =>
+            (b === round.bye) - (a === round.bye) ||
+            (refCount[a] || 0) - (refCount[b] || 0));
+        const ref = cands[0];
+        if (ref) { usedThisRd.add(ref); refCount[ref] = (refCount[ref] || 0) + 1; }
         for (let gI = 0; gI < games; gI++) {
           sched.push({
             id: "m" + ++seq, rd, ct,
             a: { g: [x] }, b: { g: [y] },
             ...(pools === 2 ? { pl: pi + 1 } : {}),
+            ...(ref ? { ref } : {}),
           });
         }
       }
@@ -505,6 +518,57 @@ export function bracketStatus(cfg, res) {
   };
 }
 
+// Refs for a batch of new bracket matches. Losing teams ref the next
+// game: the most recently beaten free team gets the whistle, then earlier
+// losers, alive-but-idle teams last. The first round uses the bye teams,
+// worst seed first — the top seed gets a pass unless they're the only
+// option. If every team is on a court, borrow from another match in the
+// batch (single-net flow: the other match is waiting beside the court).
+function assignBracketRefs(cfg, res, matches) {
+  const seeds = cfg.seeds || [];
+  const seedRank = new Map(seeds.map((g, i) => [g, i]));
+  const playing = new Set(matches.flatMap((m) => [m.a.g[0], m.b.g[0]]));
+  const refCount = {};
+  const lastLoss = new Map();
+  let anyBracket = false;
+  for (const m of cfg.sched) {
+    if (m.ref) refCount[m.ref] = (refCount[m.ref] || 0) + 1;
+    if (!m.br) continue;
+    anyBracket = true;
+    const s = seriesScore(m, res);
+    if (!s.done) continue;
+    const loser = s.aW > s.bW ? m.b.g[0] : m.a.g[0];
+    lastLoss.set(loser, Math.max(lastLoss.get(loser) || 0, m.rd));
+  }
+  const used = new Set();
+  const sparingTop = (list) => {
+    const noTop = list.filter((g) => g !== seeds[0]);
+    return noTop.length ? noTop : list;
+  };
+  for (const m of matches) {
+    const inMatch = new Set([m.a.g[0], m.b.g[0]]);
+    let cands = seeds.filter((g) => !inMatch.has(g) && !used.has(g) && !playing.has(g));
+    if (!anyBracket) {
+      cands.sort((a, b) => seedRank.get(b) - seedRank.get(a)); // worst seed refs first
+      cands = sparingTop(cands);
+    } else {
+      cands.sort((a, b) =>
+        (lastLoss.get(b) || 0) - (lastLoss.get(a) || 0) ||
+        (refCount[a] || 0) - (refCount[b] || 0) ||
+        seedRank.get(b) - seedRank.get(a));
+    }
+    if (!cands.length) {
+      const alt = matches
+        .filter((x) => x !== m)
+        .flatMap((x) => [x.a.g[0], x.b.g[0]])
+        .filter((g) => !used.has(g) && !inMatch.has(g))
+        .sort((a, b) => seedRank.get(b) - seedRank.get(a));
+      cands = sparingTop(alt);
+    }
+    if (cands.length) { m.ref = cands[0]; used.add(cands[0]); }
+  }
+}
+
 // Creates every newly-determined bracket match (never the deciding game —
 // that's genResetFinal, by director discretion).
 export function advanceBracket(cfg, res) {
@@ -528,6 +592,7 @@ export function advanceBracket(cfg, res) {
     a: { g: [state.get(sp.id).aId] }, b: { g: [state.get(sp.id).bId] },
     br: sp.br, brd: sp.brd, bo: sp.bo, lbl: bracketLabel(sp, R),
   }));
+  assignBracketRefs(cfg, res, matches);
   return { cfg: { ...cfg, sched: [...cfg.sched, ...matches], rds: rd } };
 }
 
@@ -542,6 +607,7 @@ export function genResetFinal(cfg, res) {
     a: { g: [gf.winner] }, b: { g: [gf.loser] },
     br: "gf2", brd: 1, bo: 1, lbl: "DECIDING GAME",
   };
+  assignBracketRefs(cfg, res, [m]);
   return { cfg: { ...cfg, sched: [...cfg.sched, m], rds: rd } };
 }
 
