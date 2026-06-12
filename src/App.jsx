@@ -7,9 +7,12 @@ import { useState, useEffect, useRef, useMemo, useCallback } from "react";
    ===================================================================== */
 
 import {
-  uid, nameOf, groupLabel, sideLabel, sidePlayerIds,
-  genRoundRobin, genPairsRound, genMixRound,
+  uid, nameOf, groupOf, groupLabel, sideLabel, sidePlayerIds,
+  genPoolPlay, genPairsRound, genMixRound,
   calcStandings, buildPairs, buildTeams,
+  matchDone, matchGames, seriesScore, getGameTarget,
+  seedFromStandings, startPlayoffs, advanceBracket, genResetFinal,
+  bracketStatus, calcPlacements,
 } from "./engine.js";
 import * as store from "./store.js";
 import { configReady } from "./firebase.js";
@@ -158,9 +161,22 @@ function Toast({ msg }) {
 }
 
 /* ---------------------- score modal ---------------------- */
-function ScoreModal({ cfg, match, existing, onSave, onClear, onClose, canClear }) {
+// One game at a time; Bo3 bracket matches get game tabs (G1/G2/G3).
+function ScoreModal({ cfg, match, res, onSaveGame, onClearGame, onClose, canClear }) {
+  const bo = match.br ? match.bo || 1 : 1;
+  const games = matchGames(match, res);
+  const series = match.br ? seriesScore(match, res) : null;
+  const firstOpen = series && series.done ? games.length - 1 : games.length;
+  const [gi, setGi] = useState(Math.max(0, Math.min(bo - 1, firstOpen)));
+  const existing = match.br ? res[`${match.id}g${gi + 1}`] : res[match.id];
   const [a, setA] = useState(existing ? existing.a : 0);
   const [b, setB] = useState(existing ? existing.b : 0);
+  const target = getGameTarget(cfg, match, gi);
+  const pickGame = (i) => {
+    setGi(i);
+    const r = res[`${match.id}g${i + 1}`];
+    setA(r ? r.a : 0); setB(r ? r.b : 0);
+  };
   const Pad = ({ val, set, label }) => (
     <div style={{ flex: 1, textAlign: "center" }}>
       <div style={{ fontWeight: 800, fontSize: 14.5, minHeight: 40, lineHeight: 1.25, marginBottom: 6 }}>{label}</div>
@@ -171,9 +187,9 @@ function ScoreModal({ cfg, match, existing, onSave, onClear, onClose, canClear }
         <button className="pressable" onClick={() => set(val + 1)}
           style={{ width: 54, height: 54, fontSize: 26, fontWeight: 800, border: `2px solid ${C.ink}`, borderRadius: 12, background: C.ink, color: C.paper, boxShadow: `2px 2px 0 ${C.ink}` }}>+</button>
       </div>
-      <button className="pressable" onClick={() => set(cfg.pointsTo)}
+      <button className="pressable" onClick={() => set(target)}
         style={{ marginTop: 8, fontSize: 13, fontWeight: 800, padding: "6px 10px", border: `2px solid ${C.ink}`, borderRadius: 8, background: C.accentSoft, boxShadow: `2px 2px 0 ${C.ink}` }}>
-        set {cfg.pointsTo}
+        set {target}
       </button>
     </div>
   );
@@ -188,8 +204,29 @@ function ScoreModal({ cfg, match, existing, onSave, onClear, onClose, canClear }
         width: "100%", maxWidth: 560, boxSizing: "border-box",
       }}>
         <Eyebrow style={{ textAlign: "center", marginBottom: 4 }}>
-          Round {match.rd} · Court {match.ct} · game to {cfg.pointsTo}
+          {match.lbl ? `${match.lbl} · Court ${match.ct}` : `Round ${match.rd} · Court ${match.ct}`} · game to {target}
         </Eyebrow>
+        {bo > 1 && (
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", margin: "8px 0 2px" }}>
+            {Array.from({ length: bo }, (_, i) => {
+              const played = !!res[`${match.id}g${i + 1}`];
+              return (
+                <button key={i} className="pressable" onClick={() => pickGame(i)} style={{
+                  padding: "7px 14px", borderRadius: 8, border: `2px solid ${C.ink}`,
+                  fontWeight: 800, fontSize: 13, fontFamily: MONO,
+                  background: gi === i ? C.ink : played ? C.greenSoft : "#fff",
+                  color: gi === i ? C.paper : C.ink,
+                  boxShadow: `2px 2px 0 ${C.ink}`,
+                }}>G{i + 1}</button>
+              );
+            })}
+          </div>
+        )}
+        {series && (
+          <div style={{ textAlign: "center", fontFamily: MONO, fontSize: 12.5, color: C.dim, marginTop: 4 }}>
+            series {series.aW}–{series.bW}{series.done ? " · decided" : ` · first to ${series.need}`}
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start", margin: "10px 0 6px" }}>
           <Pad val={a} set={setA} label={sideLabel(cfg, match.a)} />
           <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 700, paddingTop: 56, color: C.dim }}>–</div>
@@ -200,16 +237,21 @@ function ScoreModal({ cfg, match, existing, onSave, onClear, onClose, canClear }
             No ties in volleyball — somebody won this one.
           </div>
         )}
+        {match.br && a !== b && (a > 0 || b > 0) && Math.abs(a - b) < 2 && (
+          <div style={{ color: C.gold, fontWeight: 700, fontSize: 13.5, textAlign: "center", marginBottom: 6 }}>
+            Playoff games are win-by-two — saving anyway is your call.
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
           <Btn kind="ghost" style={{ flex: 1 }} onClick={onClose}>Cancel</Btn>
           <Btn kind="green" style={{ flex: 2 }} disabled={a === b}
-            onClick={() => onSave(a, b)}>
-            {existing ? "Update score" : "Save final score"}
+            onClick={() => onSaveGame(gi, a, b)}>
+            {existing ? "Update score" : bo > 1 ? `Save game ${gi + 1}` : "Save final score"}
           </Btn>
         </div>
         {existing && canClear && (
           <div style={{ marginTop: 10, textAlign: "center" }}>
-            <Btn kind="danger" small onClick={onClear}>Clear result</Btn>
+            <Btn kind="danger" small onClick={() => onClearGame(gi)}>{bo > 1 ? `Clear game ${gi + 1}` : "Clear result"}</Btn>
           </div>
         )}
       </div>
@@ -218,13 +260,16 @@ function ScoreModal({ cfg, match, existing, onSave, onClear, onClose, canClear }
 }
 
 /* ---------------------- match card ---------------------- */
-function MatchCard({ cfg, match, result, onTap, highlightIds }) {
-  const done = !!result;
+// `result` for plain matches ({a,b}), `series` for bracket matches.
+function MatchCard({ cfg, match, result, series, onTap, highlightIds }) {
+  const isSeries = !!match.br;
+  const done = isSeries ? series.done : !!result;
+  const started = isSeries && series.games.length > 0;
   const aIds = sidePlayerIds(cfg, match.a);
   const bIds = sidePlayerIds(cfg, match.b);
   const mine = highlightIds && (aIds.some((x) => highlightIds.has(x)) || bIds.some((x) => highlightIds.has(x)));
-  const aWin = done && result.a > result.b;
-  const Side = ({ side, score, win }) => (
+  const aWin = done && (isSeries ? series.aW > series.bW : result.a > result.b);
+  const Side = ({ side, score, games, win }) => (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "4px 0" }}>
       <div style={{
         fontWeight: win ? 800 : 600, fontSize: 16, lineHeight: 1.3,
@@ -232,7 +277,12 @@ function MatchCard({ cfg, match, result, onTap, highlightIds }) {
       }}>
         {sideLabel(cfg, side)} {win && <span style={{ color: C.green }}>✓</span>}
       </div>
-      {done && (
+      {games != null && (
+        <div style={{ fontFamily: MONO, fontSize: games.length > 1 ? 19 : 26, fontWeight: 700, color: win ? C.ink : C.dim, whiteSpace: "nowrap" }}>
+          {games.join("  ")}
+        </div>
+      )}
+      {score != null && (
         <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 700, color: win ? C.ink : C.dim }}>
           {score}
         </div>
@@ -248,13 +298,37 @@ function MatchCard({ cfg, match, result, onTap, highlightIds }) {
       borderLeft: done ? `6px solid ${C.green}` : `6px solid ${C.accent}`,
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-        <CourtBadge n={match.ct} />
-        {!done && <span className="blink" style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: "0.1em", color: C.accent }}>TAP TO SCORE</span>}
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <CourtBadge n={match.ct} />
+          {match.pl && (
+            <span style={{ fontFamily: MONO, fontWeight: 700, fontSize: 12, letterSpacing: "0.06em", background: "#fff", color: C.ink, border: `2px solid ${C.ink}`, borderRadius: 7, padding: "2px 6px" }}>
+              POOL {match.pl === 1 ? "A" : "B"}
+            </span>
+          )}
+          {isSeries && match.bo > 1 && (
+            <span style={{ fontFamily: MONO, fontWeight: 700, fontSize: 12, letterSpacing: "0.06em", color: C.dim }}>BO3</span>
+          )}
+        </div>
+        {!done && (
+          <span className="blink" style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: "0.1em", color: C.accent }}>
+            {started ? `GAME ${series.games.length + 1} · TAP TO SCORE` : "TAP TO SCORE"}
+          </span>
+        )}
         {done && <span style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: "0.1em", color: C.green }}>FINAL</span>}
       </div>
-      <Side side={match.a} score={done ? result.a : null} win={aWin} />
-      <div style={{ borderTop: `1.5px dashed ${C.line}` }} />
-      <Side side={match.b} score={done ? result.b : null} win={done && !aWin} />
+      {isSeries ? (
+        <>
+          <Side side={match.a} games={series.games.map((g) => g.a)} win={aWin} />
+          <div style={{ borderTop: `1.5px dashed ${C.line}` }} />
+          <Side side={match.b} games={series.games.map((g) => g.b)} win={done && !aWin} />
+        </>
+      ) : (
+        <>
+          <Side side={match.a} score={done ? result.a : null} win={aWin} />
+          <div style={{ borderTop: `1.5px dashed ${C.line}` }} />
+          <Side side={match.b} score={done ? result.b : null} win={done && !aWin} />
+        </>
+      )}
     </div>
   );
 }
@@ -325,6 +399,7 @@ export default function App() {
   const [fTeamSize, setFTeamSize] = useState(2);
   const [fCourts, setFCourts] = useState(2);
   const [fPoints, setFPoints] = useState(21);
+  const [fPoolGames, setFPoolGames] = useState(1);
   const [fPin, setFPin] = useState("");
   const [regName, setRegName] = useState("");
   const [regExtra, setRegExtra] = useState("");
@@ -340,6 +415,16 @@ export default function App() {
   const [setupGroups, setSetupGroups] = useState([]);
   const [setupRoster, setSetupRoster] = useState([]);
   const [sel, setSel] = useState(null);
+  const [setupPools, setSetupPools] = useState(1);
+  const [setupPlan, setSetupPlan] = useState("pool"); // 'pool' | 'bracket'
+
+  // playoff seeding editor (teams format)
+  const [poMode, setPoMode] = useState(false);
+  const [poSeeds, setPoSeeds] = useState([]);
+  const [poSel, setPoSel] = useState(null);
+  const [poG12, setPoG12] = useState(21);
+  const [poG3, setPoG3] = useState(15);
+  const [poConfirm, setPoConfirm] = useState(false);
 
   const leavingRef = useRef(false); // suppresses the deleted-event handler while we tear down ourselves
 
@@ -362,6 +447,7 @@ export default function App() {
     leavingRef.current = true;
     setView("landing"); setCode(""); setCfg(null); setRegs([]); setRes({});
     setMe(""); setAdminOk(false); setSetupMode(false);
+    setPoMode(false); setPoConfirm(false);
     setJoinInput(""); setPinInput(""); setConnOk(true); loadRecents();
   }, [loadRecents]);
 
@@ -423,7 +509,7 @@ export default function App() {
     setMe(savedMe || "");
     const savedPin = store.getPin(cc);
     setAdminOk(!!savedPin && savedPin === loaded.pin);
-    setTab("schedule"); setSetupMode(false); setModal(null); setConfirmDel(false);
+    setTab("schedule"); setSetupMode(false); setPoMode(false); setModal(null); setConfirmDel(false);
     setView("event");
     setBusy(false);
   };
@@ -434,12 +520,15 @@ export default function App() {
     setBusy(true);
     try {
       const full = await store.createEvent({
-        v: 1, name: fName.trim(), format: fFormat,
+        v: 2, name: fName.trim(), format: fFormat,
         teamSize: fFormat === "pairs" ? 2 : fTeamSize,
         courts: fCourts, pointsTo: fPoints, pin: fPin,
         status: "signup",
         roster: [], groups: null, sched: [], rds: 0, mseq: 0,
         byes: {}, sit: {}, inact: [], sat: {},
+        stage: "", pools: 1,
+        poolGames: fFormat === "teams" ? fPoolGames : 1,
+        seeds: [], po: { g12: 21, g3: 15 },
       });
       store.setPin(full.code, fPin);
       setCode(full.code); setCfg(full); setRegs([]); setRes({});
@@ -516,7 +605,17 @@ export default function App() {
     const groups = cfg.format === "pairs"
       ? buildPairs(roster, regs)
       : buildTeams(roster, regs, cfg.teamSize);
-    setSetupRoster(roster); setSetupGroups(groups); setSel(null); setSetupMode(true);
+    setSetupRoster(roster); setSetupGroups(groups); setSel(null);
+    setSetupPools(1); setSetupPlan("pool");
+    setSetupMode(true);
+  };
+
+  const setPoolCount = (n) => {
+    setSetupPools(n);
+    setSetupGroups(setupGroups.map((g, i) => ({ ...g, pool: n === 2 ? (i % 2) + 1 : 1 })));
+  };
+  const flipPool = (gid) => {
+    setSetupGroups(setupGroups.map((g) => (g.id === gid ? { ...g, pool: g.pool === 2 ? 1 : 2 } : g)));
   };
 
   const reshuffleSetup = () => {
@@ -571,36 +670,42 @@ export default function App() {
       status: "live",
     };
     if (cfg.format === "teams") {
-      live = { ...live, groups: full, inact: [] };
-      live = genRoundRobin(live);
+      live = { ...live, groups: full, inact: [], stage: "pool", pools: setupPools };
+      if (setupPlan === "pool") live = genPoolPlay(live);
       if (benched.length) say("Heads up: incomplete teams were dropped.");
     }
     pushCfg(live);
     setSetupMode(false); setTab("schedule");
     if (cfg.format === "pairs") { say("Live! Generate round 1 from Director."); setTab("admin"); }
+    if (cfg.format === "teams" && setupPlan === "bracket") {
+      say("Live! Seed the bracket from Director when you're ready."); setTab("admin");
+    }
   };
 
   /* -------------------- live actions -------------------- */
-  const saveScore = (mid, a, b) => {
-    const prev = res[mid];
-    setRes((cur) => ({ ...cur, [mid]: { a, b, ts: Date.now() } }));
+  // Bracket matches store one result doc per game (id + 'g1'..'g3').
+  const saveScore = (m, gi, a, b) => {
+    const rid = m.br ? `${m.id}g${gi + 1}` : m.id;
+    const prev = res[rid];
+    setRes((cur) => ({ ...cur, [rid]: { a, b, ts: Date.now() } }));
     setModal(null);
-    store.saveResult(code, mid, a, b)
+    store.saveResult(code, rid, a, b)
       .catch((e) => {
         console.error(e);
         say("Couldn't save — check connection and retry.");
         setRes((cur) => {
           const c2 = { ...cur };
-          if (prev) c2[mid] = prev; else delete c2[mid];
+          if (prev) c2[rid] = prev; else delete c2[rid];
           return c2;
         });
       });
   };
 
-  const clearResult = (mid) => {
-    setRes((cur) => { const c2 = { ...cur }; delete c2[mid]; return c2; });
+  const clearResult = (m, gi) => {
+    const rid = m.br ? `${m.id}g${gi + 1}` : m.id;
+    setRes((cur) => { const c2 = { ...cur }; delete c2[rid]; return c2; });
     setModal(null);
-    store.clearResult(code, mid)
+    store.clearResult(code, rid)
       .then(() => say("Result cleared."))
       .catch((e) => { console.error(e); say("Couldn't clear — check connection."); });
   };
@@ -644,6 +749,69 @@ export default function App() {
     say(`${n1}/${n2} are in — they'll rotate into round ${(cfg.rds || 0) + 1}.`);
   };
 
+  /* -------------------- playoffs (teams format) -------------------- */
+  const openPlayoffSetup = () => {
+    setPoSeeds(seedFromStandings(cfg, res));
+    setPoG12((cfg.po && cfg.po.g12) || 21);
+    setPoG3((cfg.po && cfg.po.g3) || 15);
+    setPoSel(null); setPoConfirm(false); setWalkName(""); setWalkExtra("");
+    setPoMode(true);
+  };
+
+  const poSwapOrSelect = (gid) => {
+    if (poSel === gid) { setPoSel(null); return; }
+    if (!poSel) { setPoSel(gid); return; }
+    const i = poSeeds.indexOf(poSel), j = poSeeds.indexOf(gid);
+    const next = [...poSeeds];
+    next[i] = gid; next[j] = poSel;
+    setPoSeeds(next); setPoSel(null);
+  };
+
+  const poDrop = (gid) => {
+    setPoSeeds(poSeeds.filter((x) => x !== gid));
+    if (poSel === gid) setPoSel(null);
+  };
+
+  // team moving down from another level: lands in the event roster and at
+  // the bottom of the seed list, all in one cfg write
+  const poAddTeam = () => {
+    const nm = walkName.trim();
+    if (!nm) { say("Enter a team name."); return; }
+    if ((cfg.groups || []).some((g) => g.name.toLowerCase() === nm.toLowerCase())) {
+      say("That team name is already here."); return;
+    }
+    const players = walkExtra.split(",").map((s) => s.trim()).filter(Boolean)
+      .filter((n) => !cfg.roster.some((r) => r.name.toLowerCase() === n.toLowerCase()))
+      .map((n) => ({ id: uid(), name: n }));
+    const g = { id: uid(), name: nm, players: players.map((p) => p.id), ...(cfg.pools === 2 ? { pool: 1 } : {}) };
+    pushCfg({ ...cfg, roster: [...cfg.roster, ...players], groups: [...(cfg.groups || []), g] });
+    setPoSeeds((cur) => [...cur, g.id]);
+    setWalkName(""); setWalkExtra("");
+    say(`${nm} is in the bracket — seeded last, tap to move them up.`);
+  };
+
+  const confirmStartPlayoffs = () => {
+    const out = startPlayoffs(cfg, res, { seeds: poSeeds, po: { g12: poG12, g3: poG3 } });
+    if (out.error) { say(out.error); return; }
+    pushCfg(out.cfg);
+    setPoMode(false); setPoConfirm(false); setTab("schedule");
+    say("Bracket is live. 🏆");
+  };
+
+  const doAdvanceBracket = () => {
+    const out = advanceBracket(cfg, res);
+    if (out.error) { say(out.error); return; }
+    pushCfg(out.cfg); setTab("schedule");
+    say("New bracket matches are up.");
+  };
+
+  const doResetFinal = () => {
+    const out = genResetFinal(cfg, res);
+    if (out.error) { say(out.error); return; }
+    pushCfg(out.cfg); setTab("schedule");
+    say("Deciding game is on the board.");
+  };
+
   const endEvent = () => {
     pushCfg({ ...cfg, status: "done" });
     setTab("standings"); say("Final standings are posted. 🏆");
@@ -680,7 +848,15 @@ export default function App() {
   }, [cfg, me]);
 
   const standings = useMemo(() => (cfg && cfg.status !== "signup" ? calcStandings(cfg, res) : []), [cfg, res]);
-  const doneCount = cfg ? cfg.sched.filter((m) => res[m.id]).length : 0;
+  const doneCount = cfg ? cfg.sched.filter((m) => matchDone(m, res)).length : 0;
+  const bs = useMemo(
+    () => (cfg && cfg.stage === "playoff" ? bracketStatus(cfg, res) : null),
+    [cfg, res]
+  );
+  const placements = useMemo(
+    () => (cfg && cfg.stage === "playoff" ? calcPlacements(cfg, res) : []),
+    [cfg, res]
+  );
 
   /* ==================== RENDER ==================== */
 
@@ -764,11 +940,20 @@ export default function App() {
             <Stepper label={fFormat === "mix" ? "Players per side" : "Players per team"} value={fTeamSize} onChange={setFTeamSize} min={2} max={6} />
           )}
           <Stepper label="Courts" value={fCourts} onChange={setFCourts} min={1} max={8} />
-          <Eyebrow style={{ margin: "4px 0 8px", color: C.ink }}>Game to</Eyebrow>
+          <Eyebrow style={{ margin: "4px 0 8px", color: C.ink }}>{fFormat === "teams" ? "Pool games to" : "Game to"}</Eyebrow>
           <div style={{ marginBottom: 16 }}>
             <ChoiceRow value={fPoints} onChange={setFPoints}
               options={[{ v: 11, label: "11" }, { v: 15, label: "15" }, { v: 21, label: "21" }, { v: 25, label: "25" }]} />
           </div>
+          {fFormat === "teams" && (
+            <>
+              <Eyebrow style={{ margin: "4px 0 8px", color: C.ink }}>Pool matchups played</Eyebrow>
+              <div style={{ marginBottom: 16 }}>
+                <ChoiceRow value={fPoolGames} onChange={setFPoolGames}
+                  options={[{ v: 1, label: "Once" }, { v: 2, label: "Twice" }]} />
+              </div>
+            </>
+          )}
           <Field label="Director PIN (4 digits)" value={fPin} inputMode="numeric"
             onChange={(v) => setFPin(v.replace(/\D/g, "").slice(0, 4))}
             placeholder="••••" hint="Unlocks director controls on any phone." />
@@ -787,7 +972,11 @@ export default function App() {
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 3 }}>
             <span style={{ fontFamily: MONO, fontWeight: 700, fontSize: 13, color: C.accent }}>{code}</span>
             <span style={{ fontSize: 12, color: C.dim }}>
-              {cfg.status === "signup" ? "signup open" : cfg.status === "done" ? "final" : `live · ${doneCount}/${cfg.sched.length} scored`}
+              {cfg.status === "signup" ? "signup open"
+                : cfg.status === "done" ? "final"
+                : cfg.stage === "playoff" ? `playoffs · ${doneCount}/${cfg.sched.length} scored`
+                : cfg.format === "teams" ? `pool play · ${doneCount}/${cfg.sched.length} scored`
+                : `live · ${doneCount}/${cfg.sched.length} scored`}
             </span>
           </div>
         </div>
@@ -882,11 +1071,42 @@ export default function App() {
             Tap one player, then another, to swap them. {cfg.format === "teams" ? "Tap a team name to rename it." : ""}
           </div>
         </Card>
+        {cfg.format === "teams" && (
+          <Card style={{ marginBottom: 14 }}>
+            <Eyebrow style={{ marginBottom: 8 }}>Pools</Eyebrow>
+            <ChoiceRow value={setupPools} onChange={setPoolCount}
+              options={[{ v: 1, label: "One pool" }, { v: 2, label: "Two pools" }]} />
+            {setupPools === 2 && (
+              <div style={{ fontSize: 13, color: C.dim, marginTop: 8 }}>
+                Tap a team's pool tag to flip it between A and B.
+              </div>
+            )}
+            <Eyebrow style={{ margin: "14px 0 8px" }}>Day plan</Eyebrow>
+            <ChoiceRow value={setupPlan} onChange={setSetupPlan}
+              options={[{ v: "pool", label: "Pool play → playoffs" }, { v: "bracket", label: "Straight to bracket" }]} />
+            {setupPlan === "bracket" && (
+              <div style={{ fontSize: 13, color: C.dim, marginTop: 8 }}>
+                No pool schedule — you'll hand-seed the bracket from the Director tab.
+                Handy for day-two divisions seeded off yesterday's results.
+              </div>
+            )}
+          </Card>
+        )}
         {setupGroups.map((g) => (
           <Card key={g.id} style={{ marginBottom: 12, padding: 12, borderLeft: g.players.length < want ? `6px solid ${C.gold}` : `2px solid ${C.ink}` }}>
             {cfg.format === "teams" ? (
-              <input value={g.name} onChange={(e) => renameGroup(g.id, e.target.value)}
-                style={{ fontWeight: 800, fontSize: 16, border: "none", background: "transparent", color: C.ink, width: "100%", marginBottom: 6, padding: 0 }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <input value={g.name} onChange={(e) => renameGroup(g.id, e.target.value)}
+                  style={{ fontWeight: 800, fontSize: 16, border: "none", background: "transparent", color: C.ink, flex: 1, minWidth: 0, padding: 0 }} />
+                {setupPools === 2 && (
+                  <button className="pressable" onClick={() => flipPool(g.id)} style={{
+                    fontFamily: MONO, fontWeight: 700, fontSize: 12, letterSpacing: "0.06em",
+                    background: g.pool === 2 ? C.ink : C.accent, color: "#fff",
+                    border: `2px solid ${C.ink}`, borderRadius: 7, padding: "4px 8px",
+                    boxShadow: `2px 2px 0 ${C.ink}`, flexShrink: 0,
+                  }}>POOL {g.pool === 2 ? "B" : "A"}</button>
+                )}
+              </div>
             ) : (
               <Eyebrow style={{ marginBottom: 6 }}>{g.name}{g.players.length < 2 ? " · needs a partner" : ""}</Eyebrow>
             )}
@@ -931,28 +1151,44 @@ export default function App() {
       return (
         <Card style={{ textAlign: "center", padding: 28 }}>
           <div style={{ fontSize: 40 }}>🏐</div>
-          <div style={{ fontWeight: 800, fontSize: 18, marginTop: 6 }}>No rounds yet</div>
+          <div style={{ fontWeight: 800, fontSize: 18, marginTop: 6 }}>{cfg.format === "teams" ? "No matches yet" : "No rounds yet"}</div>
           <div style={{ color: C.dim, fontSize: 14.5, marginTop: 4 }}>
-            {adminOk ? "Generate round 1 from the Director tab." : "The director hasn't posted round 1 yet."}
+            {adminOk
+              ? cfg.format === "teams" ? "Seed the bracket from the Director tab." : "Generate round 1 from the Director tab."
+              : "The director hasn't posted anything yet."}
           </div>
         </Card>
       );
     }
-    const rounds = [...new Set(cfg.sched.map((m) => m.rd))].sort((a, b) => b - a);
+    // group pool matches by round, bracket matches by their stage label;
+    // newest group on top (matches the old newest-round-first ordering)
+    const groups = [];
+    const byKey = new Map();
+    cfg.sched.forEach((m, i) => {
+      const key = m.lbl || `ROUND ${m.rd}`;
+      if (!byKey.has(key)) {
+        const g = { key, rd: m.lbl ? null : m.rd, order: i, ms: [] };
+        byKey.set(key, g); groups.push(g);
+      }
+      byKey.get(key).ms.push(m);
+    });
+    groups.sort((x, y) => y.order - x.order);
     return (
       <div>
-        {rounds.map((rd) => {
-          const ms = cfg.sched.filter((m) => m.rd === rd);
-          const byes = (cfg.byes || {})[rd] || [];
-          const sit = (cfg.sit || {})[rd] || [];
+        {groups.map((grp) => {
+          const byes = grp.rd != null ? (cfg.byes || {})[grp.rd] || [] : [];
+          const sit = grp.rd != null ? (cfg.sit || {})[grp.rd] || [] : [];
           return (
-            <div key={rd} style={{ marginBottom: 20 }}>
+            <div key={grp.key} style={{ marginBottom: 20 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 13, background: C.accent, color: "#fff", borderRadius: 8, padding: "4px 10px" }}>ROUND {rd}</div>
+                <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 13, background: C.accent, color: "#fff", borderRadius: 8, padding: "4px 10px" }}>{grp.key}</div>
                 <div style={{ flex: 1, borderTop: `2px solid ${C.line}` }} />
               </div>
-              {ms.map((m) => (
-                <MatchCard key={m.id} cfg={cfg} match={m} result={res[m.id]} highlightIds={myIds}
+              {grp.ms.map((m) => (
+                <MatchCard key={m.id} cfg={cfg} match={m}
+                  result={m.br ? null : res[m.id]}
+                  series={m.br ? seriesScore(m, res) : null}
+                  highlightIds={myIds}
                   onTap={() => cfg.status === "done" && !adminOk ? say("Event is final — director can reopen scoring.") : setModal(m)} />
               ))}
               {byes.length > 0 && (
@@ -975,13 +1211,9 @@ export default function App() {
   /* ---------- live: standings ---------- */
   function renderStandings() {
     const fmtLabel = cfg.format === "mix" ? "Player" : cfg.format === "pairs" ? "Pair" : "Team";
-    return (
-      <div>
-        {cfg.status === "done" && (
-          <Card accent style={{ textAlign: "center", marginBottom: 14, background: C.greenSoft }}>
-            <div style={{ fontWeight: 900, fontSize: 20 }}>🏆 Final standings</div>
-          </Card>
-        )}
+    const table = (rows, title) => (
+      <div key={title || "all"} style={{ marginBottom: 14 }}>
+        {title && <Eyebrow style={{ margin: "0 0 8px" }}>{title}</Eyebrow>}
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ display: "flex", padding: "10px 14px", background: C.ink, color: C.paper, fontSize: 11.5, fontWeight: 800, letterSpacing: "0.1em" }}>
             <div style={{ width: 34 }}>#</div>
@@ -989,7 +1221,7 @@ export default function App() {
             <div style={{ width: 56, textAlign: "right" }}>W–L</div>
             <div style={{ width: 56, textAlign: "right" }}>DIFF</div>
           </div>
-          {standings.map((s, i) => {
+          {rows.map((s, i) => {
             const diff = s.pf - s.pa;
             return (
               <div key={s.id} style={{
@@ -1007,7 +1239,46 @@ export default function App() {
             );
           })}
         </Card>
-        <div style={{ fontSize: 12.5, color: C.dim, marginTop: 10 }}>Ranked by wins, then point differential, then points for.</div>
+      </div>
+    );
+    const inPlayoffs = cfg.stage === "playoff";
+    const poolTables = cfg.format === "teams" && cfg.pools === 2
+      ? [
+          table(standings.filter((s) => (groupOf(cfg, s.id) || {}).pool !== 2), "Pool A"),
+          table(standings.filter((s) => (groupOf(cfg, s.id) || {}).pool === 2), "Pool B"),
+        ]
+      : [table(standings)];
+    return (
+      <div>
+        {cfg.status === "done" && (
+          <Card accent style={{ textAlign: "center", marginBottom: 14, background: C.greenSoft }}>
+            <div style={{ fontWeight: 900, fontSize: 20 }}>🏆 Final standings</div>
+          </Card>
+        )}
+        {inPlayoffs && placements.length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <Eyebrow style={{ margin: "0 0 8px" }}>{cfg.status === "done" ? "Final placements" : "Bracket — live placements"}</Eyebrow>
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              {placements.map((p, i) => (
+                <div key={p.id} style={{
+                  display: "flex", alignItems: "center", padding: "11px 14px",
+                  borderBottom: `1.5px dashed ${C.line}`,
+                  background: i === 0 && bs && bs.champion ? "#FFF8E6" : "#fff",
+                }}>
+                  <div style={{ width: 34, fontFamily: MONO, fontWeight: 700, color: i === 0 && bs && bs.champion ? C.gold : C.dim }}>{i + 1}</div>
+                  <div style={{ flex: 1, fontWeight: 700, fontSize: 15.5 }}>{p.label}</div>
+                  <div style={{ fontFamily: MONO, fontSize: 12, color: C.dim }}>SEED {cfg.seeds.indexOf(p.id) + 1}</div>
+                </div>
+              ))}
+            </Card>
+            {cfg.status !== "done" && (
+              <div style={{ fontSize: 12.5, color: C.dim, marginTop: 8 }}>Updates as bracket results land; final when the director ends the event.</div>
+            )}
+          </div>
+        )}
+        {inPlayoffs && <Eyebrow style={{ margin: "0 0 8px" }}>Pool play results</Eyebrow>}
+        {poolTables}
+        <div style={{ fontSize: 12.5, color: C.dim, marginTop: -4 }}>Ranked by wins, then point differential, then points for.</div>
       </div>
     );
   }
@@ -1031,14 +1302,15 @@ export default function App() {
     }
     const mine = cfg.sched.filter((m) =>
       sidePlayerIds(cfg, m.a).some((x) => myIds.has(x)) || sidePlayerIds(cfg, m.b).some((x) => myIds.has(x)));
-    const pending = mine.filter((m) => !res[m.id]);
-    const played = mine.filter((m) => res[m.id]).reverse();
+    const pending = mine.filter((m) => !matchDone(m, res));
+    const played = mine.filter((m) => matchDone(m, res)).reverse();
     let w = 0, l = 0, diff = 0;
-    for (const m of played) {
-      const r = res[m.id];
+    for (const m of mine) {
       const onA = sidePlayerIds(cfg, m.a).some((x) => myIds.has(x));
-      const my = onA ? r.a : r.b, their = onA ? r.b : r.a;
-      my > their ? w++ : l++; diff += my - their;
+      for (const r of matchGames(m, res)) { // every completed game counts
+        const my = onA ? r.a : r.b, their = onA ? r.b : r.a;
+        my > their ? w++ : l++; diff += my - their;
+      }
     }
     return (
       <div>
@@ -1055,9 +1327,9 @@ export default function App() {
         <button onClick={() => { setMe(""); store.clearMe(code); }} style={{ border: "none", background: "none", color: C.dim, fontSize: 13, textDecoration: "underline", marginBottom: 12, cursor: "pointer", padding: 0 }}>Not you? Switch player</button>
         <Eyebrow style={{ margin: "4px 0 10px" }}>Up next</Eyebrow>
         {pending.length === 0 && <div style={{ color: C.dim, fontSize: 14.5, marginBottom: 14 }}>Nothing on the board — hydrate. 🧃</div>}
-        {pending.map((m) => <MatchCard key={m.id} cfg={cfg} match={m} result={null} highlightIds={myIds} onTap={() => setModal(m)} />)}
+        {pending.map((m) => <MatchCard key={m.id} cfg={cfg} match={m} result={null} series={m.br ? seriesScore(m, res) : null} highlightIds={myIds} onTap={() => setModal(m)} />)}
         {played.length > 0 && <Eyebrow style={{ margin: "10px 0" }}>Played</Eyebrow>}
-        {played.map((m) => <MatchCard key={m.id} cfg={cfg} match={m} result={res[m.id]} highlightIds={myIds} onTap={() => setModal(m)} />)}
+        {played.map((m) => <MatchCard key={m.id} cfg={cfg} match={m} result={m.br ? null : res[m.id]} series={m.br ? seriesScore(m, res) : null} highlightIds={myIds} onTap={() => setModal(m)} />)}
       </div>
     );
   }
@@ -1083,6 +1355,9 @@ export default function App() {
       : cfg.format === "pairs"
         ? (cfg.groups || []).map((g) => ({ id: g.id, label: groupLabel(cfg, g.id), meta: "" }))
         : [];
+    const unscoredPool = cfg.format === "teams"
+      ? cfg.sched.filter((m) => !m.br && !res[m.id]).length
+      : 0;
     return (
       <div>
         {isRoundBased && cfg.status === "live" && (
@@ -1096,6 +1371,50 @@ export default function App() {
                 ? "Pairs are combined into fresh 4s, spreading out repeat partners and byes."
                 : "Teams reshuffle for variety; whoever sat last round plays first."}
             </div>
+          </Card>
+        )}
+        {cfg.format === "teams" && cfg.status === "live" && cfg.stage !== "playoff" && (
+          <Card accent style={{ marginBottom: 14 }}>
+            <Eyebrow style={{ marginBottom: 8 }}>Playoffs</Eyebrow>
+            <Btn kind="green" style={{ width: "100%" }} disabled={busy} onClick={openPlayoffSetup}>
+              Set up playoffs →
+            </Btn>
+            <div style={{ fontSize: 13, color: C.dim, marginTop: 8 }}>
+              Seeds start from pool standings{cfg.pools === 2 ? " (cross-seeded A1, B1, A2, B2…)" : ""}.
+              You can reorder, drop a team that moved up a level, or add one that moved down
+              before the bracket locks.
+              {unscoredPool > 0 ? ` ${unscoredPool} pool ${unscoredPool === 1 ? "match has" : "matches have"} no score yet.` : ""}
+            </div>
+          </Card>
+        )}
+        {cfg.format === "teams" && cfg.status === "live" && cfg.stage === "playoff" && (
+          <Card accent style={{ marginBottom: 14 }}>
+            <Eyebrow style={{ marginBottom: 8 }}>Bracket</Eyebrow>
+            <Btn kind="green" style={{ width: "100%" }} disabled={busy} onClick={doAdvanceBracket}>
+              Advance bracket →
+            </Btn>
+            {bs && bs.needsReset && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, marginBottom: 8 }}>
+                  The losers-bracket team took the grand final. House rules decide:
+                  play one deciding game, or end the event and let the win stand.
+                </div>
+                <Btn kind="ink" small style={{ width: "100%" }} onClick={doResetFinal}>
+                  Generate deciding game
+                </Btn>
+              </div>
+            )}
+            {bs && bs.champion && !bs.needsReset && (
+              <div style={{ fontSize: 13.5, color: C.dim, marginTop: 8 }}>
+                Bracket champion: <b>{groupLabel(cfg, bs.champion)}</b> — end the event to post final standings.
+              </div>
+            )}
+            {!(bs && (bs.champion || bs.needsReset)) && (
+              <div style={{ fontSize: 13, color: C.dim, marginTop: 8 }}>
+                Posts every newly-determined match — winners advance, first losses drop
+                to the single-game losers bracket.
+              </div>
+            )}
           </Card>
         )}
         {actList.length > 0 && (
@@ -1155,10 +1474,98 @@ export default function App() {
     );
   }
 
+  /* ---------- playoff seeding editor ---------- */
+  function renderPlayoffSetup() {
+    const unscoredPool = cfg.sched.filter((m) => !m.br && !res[m.id]).length;
+    const dropped = (cfg.groups || []).filter((g) => !poSeeds.includes(g.id));
+    return (
+      <Shell toast={toast}>
+        {renderHeader()}
+        <Card accent style={{ marginBottom: 14 }}>
+          <div style={{ fontWeight: 900, fontSize: 20 }}>Seed the bracket</div>
+          <div style={{ fontSize: 13.5, color: C.dim, marginTop: 4 }}>
+            Order comes from pool standings. Tap two teams to swap seeds, ✕ to pull a
+            team from the bracket (moving up a level), or add a team coming down.
+          </div>
+        </Card>
+        <Card style={{ marginBottom: 14, padding: 12 }}>
+          {poSeeds.map((gid, i) => (
+            <div key={gid} onClick={() => poSwapOrSelect(gid)} className="pressable" style={{
+              display: "flex", alignItems: "center", gap: 10, padding: "9px 8px",
+              borderBottom: `1.5px dashed ${C.line}`, cursor: "pointer", borderRadius: 8,
+              background: poSel === gid ? C.accentSoft : "transparent",
+            }}>
+              <div style={{ fontFamily: MONO, fontWeight: 700, width: 28, color: poSel === gid ? C.accent : C.dim }}>{i + 1}</div>
+              <div style={{ flex: 1, fontWeight: 700 }}>{groupLabel(cfg, gid)}</div>
+              {cfg.pools === 2 && (groupOf(cfg, gid) || {}).pool && (
+                <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>POOL {(groupOf(cfg, gid) || {}).pool === 2 ? "B" : "A"}</span>
+              )}
+              <button onClick={(e) => { e.stopPropagation(); poDrop(gid); }}
+                style={{ border: "none", background: "none", color: "#B3261E", fontWeight: 800, fontSize: 16, cursor: "pointer" }}>✕</button>
+            </div>
+          ))}
+          {poSeeds.length === 0 && <div style={{ color: C.dim, fontSize: 14.5 }}>Nobody in the bracket — add teams below.</div>}
+        </Card>
+        {dropped.length > 0 && (
+          <Card style={{ marginBottom: 14 }}>
+            <Eyebrow style={{ marginBottom: 8 }}>Out of the bracket</Eyebrow>
+            {dropped.map((g) => (
+              <div key={g.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 2px", borderBottom: `1.5px dashed ${C.line}` }}>
+                <div style={{ fontWeight: 700, color: C.dim }}>{g.name}</div>
+                <Btn kind="ghost" small onClick={() => setPoSeeds([...poSeeds, g.id])}>Re-add</Btn>
+              </div>
+            ))}
+          </Card>
+        )}
+        <Card style={{ marginBottom: 14 }}>
+          <Eyebrow style={{ marginBottom: 8 }}>Add a team — moved down from another level</Eyebrow>
+          <input value={walkName} onChange={(e) => setWalkName(e.target.value)} placeholder="Team name"
+            style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `2px solid ${C.ink}`, borderRadius: 10, fontSize: 16, marginBottom: 8, background: "#fff", color: C.ink }} />
+          <input value={walkExtra} onChange={(e) => setWalkExtra(e.target.value)} placeholder="Players (optional, comma-separated)"
+            style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: `2px solid ${C.ink}`, borderRadius: 10, fontSize: 16, marginBottom: 8, background: "#fff", color: C.ink }} />
+          <Btn kind="ink" small style={{ width: "100%" }} onClick={poAddTeam}>Add to bracket</Btn>
+        </Card>
+        <Card style={{ marginBottom: 14 }}>
+          <Eyebrow style={{ marginBottom: 8 }}>Games 1–2 to</Eyebrow>
+          <ChoiceRow value={poG12} onChange={setPoG12}
+            options={[{ v: 15, label: "15" }, { v: 21, label: "21" }, { v: 25, label: "25" }]} />
+          <Eyebrow style={{ margin: "12px 0 8px" }}>Game 3 &amp; decider to</Eyebrow>
+          <ChoiceRow value={poG3} onChange={setPoG3}
+            options={[{ v: 11, label: "11" }, { v: 15, label: "15" }, { v: 21, label: "21" }]} />
+          <div style={{ fontSize: 13, color: C.dim, marginTop: 10 }}>
+            Winners bracket and grand final are best of 3, win by two, no cap.
+            Losers bracket is a single game to {poG12}.
+          </div>
+        </Card>
+        {!poConfirm ? (
+          <Btn kind="green" style={{ width: "100%" }} disabled={poSeeds.length < 2}
+            onClick={() => (unscoredPool > 0 ? setPoConfirm(true) : confirmStartPlayoffs())}>
+            Start playoffs ✓
+          </Btn>
+        ) : (
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: "#B3261E", marginBottom: 8, textAlign: "center" }}>
+              {unscoredPool} pool {unscoredPool === 1 ? "match has" : "matches have"} no score — they won't count toward seeding.
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <Btn kind="ghost" style={{ flex: 1 }} onClick={() => setPoConfirm(false)}>Go back</Btn>
+              <Btn kind="green" style={{ flex: 1 }} onClick={confirmStartPlayoffs}>Start anyway</Btn>
+            </div>
+          </div>
+        )}
+        <div style={{ marginTop: 12 }}>
+          <Btn kind="ghost" small onClick={() => setPoMode(false)}>← Back</Btn>
+        </div>
+      </Shell>
+    );
+  }
+
   /* ---------- live shell with tabs ---------- */
   function renderEvent() {
     if (cfg.status === "signup" && setupMode) return renderSetup();
     if (cfg.status === "signup") return renderLobby();
+    if (poMode && adminOk && cfg.status === "live" && cfg.format === "teams" && cfg.stage !== "playoff")
+      return renderPlayoffSetup();
     const TABS = [
       { v: "schedule", label: "Schedule", ico: "🗓" },
       { v: "standings", label: "Standings", ico: "🏆" },
@@ -1190,10 +1597,10 @@ export default function App() {
           </div>
         </div>
         {modal && (
-          <ScoreModal cfg={cfg} match={modal} existing={res[modal.id]}
+          <ScoreModal key={modal.id} cfg={cfg} match={modal} res={res}
             canClear={adminOk}
-            onSave={(a, b) => saveScore(modal.id, a, b)}
-            onClear={() => clearResult(modal.id)}
+            onSaveGame={(gi, a, b) => saveScore(modal, gi, a, b)}
+            onClearGame={(gi) => clearResult(modal, gi)}
             onClose={() => setModal(null)} />
         )}
       </Shell>

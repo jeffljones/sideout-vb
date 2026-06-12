@@ -25,10 +25,17 @@ const evDoc = (code) => doc(db, "events", code);
 const regsCol = (code) => collection(db, "events", code, "regs");
 const resultsCol = (code) => collection(db, "events", code, "results");
 
+// Older event docs predate the playoff fields; fill the defaults so the
+// UI and engine can rely on them.
+const normalizeCfg = (d) => ({
+  stage: "", pools: 1, poolGames: 1, seeds: [], po: { g12: 21, g3: 15 },
+  ...d,
+});
+
 /* ---------------------- events ---------------------- */
 export async function loadEvent(code) {
   const snap = await getDoc(evDoc(code));
-  return snap.exists() ? snap.data() : null;
+  return snap.exists() ? normalizeCfg(snap.data()) : null;
 }
 
 // Picks an unused 4-letter code, writes the cfg doc, returns the full cfg.
@@ -50,7 +57,7 @@ export async function saveCfg(code, cfg) {
 export function subscribeEvent(code, onData, onError) {
   return onSnapshot(
     evDoc(code),
-    (snap) => onData(snap.exists() ? snap.data() : null),
+    (snap) => onData(snap.exists() ? normalizeCfg(snap.data()) : null),
     onError
   );
 }

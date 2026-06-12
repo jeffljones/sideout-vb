@@ -10,14 +10,28 @@ carry no phone at all (the director proxy-registers them).
 
 ## Formats
 
-1. **Fixed teams round robin** (2s–6s) — full schedule generated at lock-in
-   (circle method), bye rotation for odd team counts.
+1. **Fixed teams tournament** (2s–6s) — pool play round robin (one pool, or
+   two pools side by side), then **double-elimination playoffs**: seeded
+   from pool standings (cross-seeded A1, B1, A2, B2… with two pools),
+   best-of-3 winners bracket and grand final (e.g. 21/21/15, win by two,
+   no cap), single-game losers bracket. If the losers-bracket team takes
+   the grand final, a single deciding game is *offered* — generating it is
+   the director's call (house rules sometimes let the Bo3 stand).
 2. **Rotating pairs** — keep one partner all day; each round, pairs combine
    into 4s matches with history-weighted grouping to minimize repeat
    teammates/opponents, fair bye rotation, leftover two pairs play 2v2.
 3. **Pickup mix** — random teams every round, individual standings, sit-out
    fairness (most-benched players go in first), small-group fallback
    shrinks team size instead of skipping a round.
+
+Tournament-day realities the flow is built around: multiple levels run as
+separate events (separate codes); the playoff **seeding screen is
+editable** — reorder seeds, pull a team that moved up a level, add one
+that moved down — because divisions get rebalanced after pool play. A
+"straight to bracket" option at lock-in supports day-two divisions that
+are hand-seeded off day-one results. Rally vs sideout scoring needs no
+app support — final scores are final scores. Mid-*bracket* roster changes
+are deliberately unsupported (they would corrupt double-elim routing).
 
 ## Stack
 
@@ -54,10 +68,16 @@ npm run build   # production build into dist/
 events/{CODE}                    the event config doc
   name, format ('teams'|'pairs'|'mix'), teamSize, courts, pointsTo, pin,
   status ('signup'|'live'|'done'), created, roster, groups, sched, rds,
-  mseq, byes, sit, inact, sat
+  mseq, byes, sit, inact, sat,
+  stage (''|'pool'|'playoff'), pools (1|2), poolGames (1|2),
+  seeds [groupId…], po { g12, g3 }       ← playoff config (teams format)
 events/{CODE}/regs/{autoId}      { name, extra, ts }
 events/{CODE}/results/{matchId}  { a, b, ts }
 ```
+
+Bracket matches use deterministic ids (`w1s2`, `l3s1`, `gf`, `gf2`) and
+best-of-3 series store **one result doc per game** (`w1s2g1`…`w1s2g3`),
+so the results schema never changes shape.
 
 Conventions (documented, not enforced):
 

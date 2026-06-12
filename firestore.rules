@@ -16,7 +16,8 @@ service cloud.firestore {
     function validEvent(d) {
       return d.keys().hasOnly(['v', 'code', 'name', 'format', 'teamSize',
           'courts', 'pointsTo', 'pin', 'status', 'created', 'roster',
-          'groups', 'sched', 'rds', 'mseq', 'byes', 'sit', 'inact', 'sat'])
+          'groups', 'sched', 'rds', 'mseq', 'byes', 'sit', 'inact', 'sat',
+          'stage', 'pools', 'poolGames', 'seeds', 'po'])
         && d.v is int
         && d.code is string && d.code.size() == 4
         && d.name is string && d.name.size() >= 1 && d.name.size() <= 80
@@ -35,7 +36,13 @@ service cloud.firestore {
         && d.byes is map
         && d.sit is map
         && d.inact is list && d.inact.size() <= 200
-        && d.sat is map;
+        && d.sat is map
+        // playoff fields (optional: events created before playoffs lack them)
+        && (!('stage' in d) || d.stage in ['', 'pool', 'playoff'])
+        && (!('pools' in d) || (d.pools is int && d.pools >= 1 && d.pools <= 2))
+        && (!('poolGames' in d) || (d.poolGames is int && d.poolGames >= 1 && d.poolGames <= 2))
+        && (!('seeds' in d) || (d.seeds is list && d.seeds.size() <= 200))
+        && (!('po' in d) || d.po is map);
     }
 
     match /events/{code} {
