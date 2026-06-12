@@ -1,0 +1,84 @@
+rules_version = '2';
+
+// SIDEOUT — honor-system rules, shape-validated.
+//
+// There is no auth by design: rec-league trust level. Anyone can read
+// events and write scores; the director PIN is a UI-level gate only.
+// These rules just validate document shape and cap sizes so vandalism
+// stays boring. Nothing sensitive belongs in event or player names.
+//
+// This file is the source of truth in the repo, but it is deployed by
+// pasting into: Firebase console → Firestore Database → Rules → Publish.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function validEvent(d) {
+      return d.keys().hasOnly(['v', 'code', 'name', 'format', 'teamSize',
+          'courts', 'pointsTo', 'pin', 'status', 'created', 'roster',
+          'groups', 'sched', 'rds', 'mseq', 'byes', 'sit', 'inact', 'sat'])
+        && d.v is int
+        && d.code is string && d.code.size() == 4
+        && d.name is string && d.name.size() >= 1 && d.name.size() <= 80
+        && d.format in ['teams', 'pairs', 'mix']
+        && d.teamSize is int && d.teamSize >= 2 && d.teamSize <= 6
+        && d.courts is int && d.courts >= 1 && d.courts <= 12
+        && d.pointsTo is int && d.pointsTo >= 1 && d.pointsTo <= 99
+        && d.pin is string && d.pin.size() == 4
+        && d.status in ['signup', 'live', 'done']
+        && d.created is int
+        && d.roster is list && d.roster.size() <= 200
+        && (d.groups == null || (d.groups is list && d.groups.size() <= 120))
+        && d.sched is list && d.sched.size() <= 2000
+        && d.rds is int && d.rds >= 0
+        && d.mseq is int && d.mseq >= 0
+        && d.byes is map
+        && d.sit is map
+        && d.inact is list && d.inact.size() <= 200
+        && d.sat is map;
+    }
+
+    match /events/{code} {
+      allow read: if true;
+
+      allow create: if code.size() == 4
+        && code.matches('[A-Z]{4}')
+        && request.resource.data.status == 'signup'
+        && validEvent(request.resource.data);
+
+      // Single-writer by convention (the director's device); the PIN is
+      // not enforced here — it's a UI gate, and this is an honor system.
+      allow update: if validEvent(request.resource.data);
+
+      // Needed for the director's two-tap delete. The client batch-deletes
+      // the regs and results subcollections along with this doc.
+      allow delete: if true;
+
+      match /regs/{regId} {
+        allow read: if true;
+        allow create: if request.resource.data.keys().hasOnly(['name', 'extra', 'ts'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() >= 1
+          && request.resource.data.name.size() <= 24
+          && request.resource.data.extra is string
+          && request.resource.data.extra.size() <= 24
+          && request.resource.data.ts is int;
+        allow delete: if true;
+      }
+
+      match /results/{matchId} {
+        allow read: if true;
+        // Anyone may write a score; rewriting is a correction, deleting
+        // clears the result.
+        allow create, update: if matchId.size() <= 12
+          && request.resource.data.keys().hasOnly(['a', 'b', 'ts'])
+          && request.resource.data.a is int
+          && request.resource.data.a >= 0 && request.resource.data.a <= 99
+          && request.resource.data.b is int
+          && request.resource.data.b >= 0 && request.resource.data.b <= 99
+          && request.resource.data.ts is int;
+        allow delete: if true;
+      }
+    }
+  }
+}
