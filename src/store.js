@@ -68,10 +68,18 @@ export async function fetchRecents() {
   return snap.docs.map((d) => ({ code: d.id, name: d.data().name || "?", created: d.data().created || 0 }));
 }
 
-// Removes the event and both subcollections (regs + results) in batches.
+// Removes the event and its subcollections (regs, results, live) in batches.
 export async function deleteEvent(code) {
-  const [regSnap, resSnap] = await Promise.all([getDocs(regsCol(code)), getDocs(resultsCol(code))]);
-  const refs = [...regSnap.docs.map((d) => d.ref), ...resSnap.docs.map((d) => d.ref), evDoc(code)];
+  const [regSnap, resSnap, liveSnap] = await Promise.all([
+    getDocs(regsCol(code)), getDocs(resultsCol(code)),
+    getDocs(collection(db, "events", code, "live")).catch(() => ({ docs: [] })),
+  ]);
+  const refs = [
+    ...regSnap.docs.map((d) => d.ref),
+    ...resSnap.docs.map((d) => d.ref),
+    ...liveSnap.docs.map((d) => d.ref),
+    evDoc(code),
+  ];
   while (refs.length) {
     const batch = writeBatch(db);
     for (const ref of refs.splice(0, 450)) batch.delete(ref);
@@ -119,6 +127,33 @@ export function subscribeResults(code, onData, onError) {
       const res = {};
       for (const d of snap.docs) res[d.id] = d.data();
       onData(res);
+    },
+    onError
+  );
+}
+
+/* ---------------------- live scores (scoreboards) ---------------------- */
+// One doc per in-progress match: { a, b, g, ts }. Written best-effort from
+// the score modal on every tap; phones never subscribe — only scoreboard
+// readers do (see scoreboard/brain.mjs). Callers swallow failures: until
+// the live block is in the published rules these writes just bounce.
+const liveCol = (code) => collection(db, "events", code, "live");
+
+export async function setLiveScore(code, mid, game, a, b) {
+  await setDoc(doc(liveCol(code), mid), { a, b, g: game, ts: Date.now() });
+}
+
+export async function clearLiveScore(code, mid) {
+  await deleteDoc(doc(liveCol(code), mid));
+}
+
+export function subscribeLive(code, onData, onError) {
+  return onSnapshot(
+    liveCol(code),
+    (snap) => {
+      const live = {};
+      for (const d of snap.docs) live[d.id] = d.data();
+      onData(live);
     },
     onError
   );

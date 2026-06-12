@@ -162,7 +162,7 @@ function Toast({ msg }) {
 
 /* ---------------------- score modal ---------------------- */
 // One game at a time; Bo3 bracket matches get game tabs (G1/G2/G3).
-function ScoreModal({ cfg, match, res, onSaveGame, onClearGame, onClose, canClear }) {
+function ScoreModal({ cfg, match, res, onSaveGame, onClearGame, onLive, onClose, canClear }) {
   const bo = match.br ? match.bo || 1 : 1;
   const games = matchGames(match, res);
   const series = match.br ? seriesScore(match, res) : null;
@@ -177,6 +177,9 @@ function ScoreModal({ cfg, match, res, onSaveGame, onClearGame, onClose, canClea
     const r = res[`${match.id}g${i + 1}`];
     setA(r ? r.a : 0); setB(r ? r.b : 0);
   };
+  // every tap also feeds the live-scoreboard doc (best-effort, silent)
+  const tapA = (v) => { setA(v); onLive && onLive(gi, v, b); };
+  const tapB = (v) => { setB(v); onLive && onLive(gi, a, v); };
   const Pad = ({ val, set, label }) => (
     <div style={{ flex: 1, textAlign: "center" }}>
       <div style={{ fontWeight: 800, fontSize: 14.5, minHeight: 40, lineHeight: 1.25, marginBottom: 6 }}>{label}</div>
@@ -228,9 +231,9 @@ function ScoreModal({ cfg, match, res, onSaveGame, onClearGame, onClose, canClea
           </div>
         )}
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start", margin: "10px 0 6px" }}>
-          <Pad val={a} set={setA} label={sideLabel(cfg, match.a)} />
+          <Pad val={a} set={tapA} label={sideLabel(cfg, match.a)} />
           <div style={{ fontFamily: MONO, fontSize: 26, fontWeight: 700, paddingTop: 56, color: C.dim }}>–</div>
-          <Pad val={b} set={setB} label={sideLabel(cfg, match.b)} />
+          <Pad val={b} set={tapB} label={sideLabel(cfg, match.b)} />
         </div>
         {a === b && (a > 0 || b > 0) && (
           <div style={{ color: "#B3261E", fontWeight: 700, fontSize: 13.5, textAlign: "center", marginBottom: 6 }}>
@@ -694,6 +697,7 @@ export default function App() {
     const prev = res[rid];
     setRes((cur) => ({ ...cur, [rid]: { a, b, ts: Date.now() } }));
     setModal(null);
+    store.clearLiveScore(code, m.id).catch(() => {}); // scoreboard: game's over
     store.saveResult(code, rid, a, b)
       .catch((e) => {
         console.error(e);
@@ -710,6 +714,7 @@ export default function App() {
     const rid = m.br ? `${m.id}g${gi + 1}` : m.id;
     setRes((cur) => { const c2 = { ...cur }; delete c2[rid]; return c2; });
     setModal(null);
+    store.clearLiveScore(code, m.id).catch(() => {});
     store.clearResult(code, rid)
       .then(() => say("Result cleared."))
       .catch((e) => { console.error(e); say("Couldn't clear — check connection."); });
@@ -1637,6 +1642,7 @@ export default function App() {
             canClear={adminOk}
             onSaveGame={(gi, a, b) => saveScore(modal, gi, a, b)}
             onClearGame={(gi) => clearResult(modal, gi)}
+            onLive={(gi, a, b) => store.setLiveScore(code, modal.id, gi + 1, a, b).catch(() => {})}
             onClose={() => setModal(null)} />
         )}
       </Shell>

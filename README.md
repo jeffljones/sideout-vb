@@ -113,6 +113,24 @@ Consequences:
   scores, remove regs, or delete the event. The blast radius is one
   volleyball day.
 
+## LED scoreboards (optional)
+
+Every tap in the score modal also updates `events/{CODE}/live/{matchId}`
+(`{a, b, g, ts}`, deleted when the game is saved). The writes are
+best-effort and silent — until the `live` block in `firestore.rules` is
+published they simply bounce, costing nothing. **Phones never subscribe
+to live docs**; that's what keeps point-by-point inside the free tier.
+
+`scoreboard/brain.mjs` is the reference reader: one Node process per
+event (a Raspberry Pi works) subscribes to the event, results, and live
+scores, derives the current match per court, and re-renders on every
+change — swap its `render()` for your fan-out to the boards (serial/UDP/
+MQTT to ESP32s). `node scoreboard/brain.mjs CODE`.
+
+Budget: rally scoring to 21 ≈ 40 live writes per game; a 60-game day
+≈ 2,500 writes, and a single brain reads each update once. Both are
+rounding errors against the Spark limits below.
+
 ## Firestore free-tier sanity math
 
 A busy tournament day, generously estimated: 40 players, ~30 active

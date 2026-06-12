@@ -86,6 +86,23 @@ service cloud.firestore {
           && request.resource.data.ts is int;
         allow delete: if true;
       }
+
+      match /live/{matchId} {
+        allow read: if true;
+        // In-progress score for LED scoreboards: one doc per match,
+        // updated on every rally from the score modal, deleted when the
+        // game is saved. Phones never subscribe; the scoreboard brain does.
+        allow create, update: if matchId.size() <= 12
+          && request.resource.data.keys().hasOnly(['a', 'b', 'g', 'ts'])
+          && request.resource.data.a is int
+          && request.resource.data.a >= 0 && request.resource.data.a <= 99
+          && request.resource.data.b is int
+          && request.resource.data.b >= 0 && request.resource.data.b <= 99
+          && request.resource.data.g is int
+          && request.resource.data.g >= 1 && request.resource.data.g <= 5
+          && request.resource.data.ts is int;
+        allow delete: if true;
+      }
     }
   }
 }
