@@ -31,7 +31,7 @@ const resultsCol = (code) => collection(db, "events", code, "results");
 // normalizes that to one bracket with unprefixed match ids).
 const normalizeCfg = (d) => ({
   stage: "", pools: 1, poolGames: 1, seeds: [], brackets: [],
-  po: { g12: 21, g3: 15 },
+  po: { g12: 21, g3: 15 }, casual: false,
   ...d,
 });
 
@@ -91,10 +91,11 @@ export async function deleteEvent(code) {
 }
 
 /* ---------------------- registrations ---------------------- */
-export async function register(code, name, extra, lvl) {
+export async function register(code, name, extra, lvl, skill) {
   await addDoc(regsCol(code), {
     name, extra: extra || "", ts: Date.now(),
     ...(lvl ? { lvl } : {}),
+    ...(skill ? { skill } : {}),
   });
 }
 

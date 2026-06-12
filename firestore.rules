@@ -43,6 +43,7 @@ service cloud.firestore {
         && (!('poolGames' in d) || (d.poolGames is int && d.poolGames >= 1 && d.poolGames <= 2))
         && (!('seeds' in d) || (d.seeds is list && d.seeds.size() <= 200))
         && (!('brackets' in d) || (d.brackets is list && d.brackets.size() <= 6))
+        && (!('casual' in d) || d.casual is bool)
         && (!('po' in d) || d.po is map);
     }
 
@@ -66,7 +67,7 @@ service cloud.firestore {
         allow read: if true;
         // name: player, pair lead, or team name; extra: partner name or a
         // comma-separated player list (hence the longer cap)
-        allow create: if request.resource.data.keys().hasOnly(['name', 'extra', 'lvl', 'ts'])
+        allow create: if request.resource.data.keys().hasOnly(['name', 'extra', 'lvl', 'skill', 'ts'])
           && request.resource.data.name is string
           && request.resource.data.name.size() >= 1
           && request.resource.data.name.size() <= 24
@@ -74,6 +75,10 @@ service cloud.firestore {
           && request.resource.data.extra.size() <= 120
           && (!('lvl' in request.resource.data)
             || request.resource.data.lvl in ['Open', 'AA', 'A', 'BB', 'B', 'Rec'])
+          && (!('skill' in request.resource.data)
+            || (request.resource.data.skill is int
+              && request.resource.data.skill >= 1
+              && request.resource.data.skill <= 3))
           && request.resource.data.ts is int;
         allow delete: if true;
       }

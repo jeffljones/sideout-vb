@@ -156,6 +156,10 @@ export function genMixRound(cfg) {
   if (active.length < 4) return { cfg, error: "Need at least 4 active players." };
   const { tm } = buildHist(cfg);
   const K = cfg.teamSize;
+  // optional 1–3 skill ratings; unrated players count as middle. When
+  // nobody is rated the original variety-only behavior is untouched.
+  const skillOf = new Map(cfg.roster.map((r) => [r.id, r.skill || 2]));
+  const skillsVary = new Set(active.map((pid) => skillOf.get(pid))).size > 1;
   // players who have sat the most go in first
   const order = shuffle(active).sort((a, b) => (sat[b] || 0) - (sat[a] || 0));
   let per = 2 * K;
@@ -174,15 +178,44 @@ export function genMixRound(cfg) {
   for (let mIdx = 0; mIdx < nMatches; mIdx++) {
     const pool = shuffle(playing.slice(mIdx * per, (mIdx + 1) * per));
     const A = [], B = [];
+    const sum = (team) => team.reduce((acc, q) => acc + skillOf.get(q), 0);
     for (const p of pool) {
       const costTo = (team) => team.reduce((acc, q) => acc + (tm.get(pk(p, q)) || 0), 0);
       if (A.length >= size) B.push(p);
       else if (B.length >= size) A.push(p);
-      else {
+      else if (skillsVary) {
+        // balance first, repeat-teammate history breaks ties
+        const ca = Math.abs(sum(A) + skillOf.get(p) - sum(B)) * 4 + costTo(A);
+        const cb = Math.abs(sum(B) + skillOf.get(p) - sum(A)) * 4 + costTo(B);
+        if (ca < cb) A.push(p);
+        else if (cb < ca) B.push(p);
+        else (A.length <= B.length ? A : B).push(p);
+      } else {
         const ca = costTo(A), cb = costTo(B);
         if (ca < cb) A.push(p);
         else if (cb < ca) B.push(p);
         else (A.length <= B.length ? A : B).push(p);
+      }
+    }
+    if (skillsVary) {
+      // local swap pass: tighten the skill gap while it improves
+      let improved = true;
+      while (improved) {
+        improved = false;
+        const d0 = Math.abs(sum(A) - sum(B));
+        let best = null, bestDiff = d0;
+        for (let i = 0; i < A.length; i++) {
+          for (let j = 0; j < B.length; j++) {
+            const delta = skillOf.get(B[j]) - skillOf.get(A[i]);
+            const nd = Math.abs(sum(A) - sum(B) + 2 * delta);
+            if (nd < bestDiff) { bestDiff = nd; best = [i, j]; }
+          }
+        }
+        if (best) {
+          const [i, j] = best;
+          [A[i], B[j]] = [B[j], A[i]];
+          improved = true;
+        }
       }
     }
     matches.push({ id: "m" + ++seq, rd, ct: (mIdx % cfg.courts) + 1, a: { p: A }, b: { p: B } });

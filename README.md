@@ -22,7 +22,12 @@ carry no phone at all (the director proxy-registers them).
    teammates/opponents, fair bye rotation, leftover two pairs play 2v2.
 3. **Pickup mix** — random teams every round, individual standings, sit-out
    fairness (most-benched players go in first), small-group fallback
-   shrinks team size instead of skipping a round.
+   shrinks team size instead of skipping a round. Players can self-rate
+   (⭐–⭐⭐⭐, optional) and each match's sides get skill-balanced — when
+   nobody rates, team-building is pure variety, exactly as before. A
+   **"just play" casual toggle** turns off scoring entirely: no standings
+   tab, no score entry, the director rotates rounds on their own clock —
+   pure non-competitive pickup with balanced random teams.
 
 **Registration follows the competitive unit**: team events register a
 *team* (team name, optional comma-separated players, level), pairs events

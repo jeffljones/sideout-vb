@@ -860,3 +860,42 @@ describe("unit registrations", () => {
     expect(pool("T3")).toBe(2); expect(pool("T1")).toBe(2);
   });
 });
+
+/* ---------------- skill-balanced pickup ---------------- */
+describe("skill balancing (mix)", () => {
+  const skilledRoster = (skills) =>
+    skills.map((s, i) => ({ id: "p" + i, name: "P" + i, ...(s ? { skill: s } : {}) }));
+
+  it("rated rounds keep each match's sides within 2 skill points", () => {
+    const skills = [3, 3, 3, 1, 1, 1, 2, 2, 3, 1, 2, 2];
+    for (let t = 0; t < ITER; t++) {
+      let cfg = baseCfg({
+        format: "mix", teamSize: 3, courts: 2,
+        roster: skilledRoster(skills),
+        sat: Object.fromEntries(skills.map((_, i) => ["p" + i, 0])),
+      });
+      const sk = new Map(cfg.roster.map((r) => [r.id, r.skill || 2]));
+      for (let r = 0; r < 6; r++) {
+        cfg = genMixRound(cfg).cfg;
+        for (const m of cfg.sched.filter((m) => m.rd === cfg.rds)) {
+          const sum = (side) => side.p.reduce((acc, q) => acc + sk.get(q), 0);
+          expect(Math.abs(sum(m.a) - sum(m.b))).toBeLessThanOrEqual(2);
+          expect(m.a.p).toHaveLength(3);
+          expect(m.b.p).toHaveLength(3);
+        }
+      }
+      expect(spread(Object.values(cfg.sat))).toBeLessThanOrEqual(1); // fairness intact
+    }
+  });
+
+  it("unrated players count as middle and small groups still shrink", () => {
+    const out = genMixRound(baseCfg({
+      format: "mix", teamSize: 4, courts: 2,
+      roster: skilledRoster([3, 0, 1, 0, 2]), // mixed rated/unrated, 5 players
+    }));
+    expect(out.error).toBeUndefined();
+    expect(out.cfg.sched).toHaveLength(1);
+    expect(out.cfg.sched[0].a.p).toHaveLength(2);
+    expect(out.cfg.sit[1]).toHaveLength(1);
+  });
+});

@@ -265,10 +265,11 @@ function ScoreModal({ cfg, match, res, onSaveGame, onClearGame, onLive, onClose,
 
 /* ---------------------- match card ---------------------- */
 // `result` for plain matches ({a,b}), `series` for bracket matches.
-function MatchCard({ cfg, match, result, series, onTap, highlightIds }) {
+// `casual` renders a scoreless roster card (pure pickup mode).
+function MatchCard({ cfg, match, result, series, onTap, highlightIds, casual }) {
   const isSeries = !!match.br;
-  const done = isSeries ? series.done : !!result;
-  const started = isSeries && series.games.length > 0;
+  const done = !casual && (isSeries ? series.done : !!result);
+  const started = isSeries && series && series.games.length > 0;
   // highlight by player id or group id (teams identify by team)
   const aIds = [...sideStatIds(cfg, match.a), ...sidePlayerIds(cfg, match.a)];
   const bIds = [...sideStatIds(cfg, match.b), ...sidePlayerIds(cfg, match.b)];
@@ -314,7 +315,7 @@ function MatchCard({ cfg, match, result, series, onTap, highlightIds }) {
             <span style={{ fontFamily: MONO, fontWeight: 700, fontSize: 12, letterSpacing: "0.06em", color: C.dim }}>BO3</span>
           )}
         </div>
-        {!done && (
+        {!done && !casual && (
           <span className="blink" style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: "0.1em", color: C.accent }}>
             {started ? `GAME ${series.games.length + 1} · TAP TO SCORE` : "TAP TO SCORE"}
           </span>
@@ -410,10 +411,13 @@ export default function App() {
   const [fCourts, setFCourts] = useState(2);
   const [fPoints, setFPoints] = useState(21);
   const [fPoolGames, setFPoolGames] = useState(1);
+  const [fCasual, setFCasual] = useState(false);
   const [fPin, setFPin] = useState("");
   const [regName, setRegName] = useState("");
   const [regExtra, setRegExtra] = useState("");
   const [regLvl, setRegLvl] = useState("");
+  const [regSkill, setRegSkill] = useState(0);
+  const [walkSkill, setWalkSkill] = useState(0);
   const [pinInput, setPinInput] = useState("");
   const [walkName, setWalkName] = useState("");
   const [walkName2, setWalkName2] = useState("");
@@ -542,6 +546,7 @@ export default function App() {
         stage: "", pools: 1,
         poolGames: fFormat === "teams" ? fPoolGames : 1,
         seeds: [], brackets: [], po: { g12: 21, g3: 15 },
+        casual: fFormat === "mix" ? fCasual : false,
       });
       store.setPin(full.code, fPin);
       setCode(full.code); setCfg(full); setRegs([]); setRes({});
@@ -574,9 +579,11 @@ export default function App() {
         r.name.toLowerCase() === n.toLowerCase() || (r.extra || "").toLowerCase() === n.toLowerCase());
       if (taken(nm) || taken(p2)) { say("One of those names is already signed up."); return; }
     }
-    store.register(code, nm, regExtra.trim(), cfg.format === "teams" ? regLvl : "")
+    store.register(code, nm, regExtra.trim(),
+      cfg.format === "teams" ? regLvl : "",
+      cfg.format === "mix" ? regSkill : 0)
       .catch((e) => { console.error(e); say("Couldn't save — check connection and retry."); });
-    setRegName(""); setRegExtra(""); setRegLvl("");
+    setRegName(""); setRegExtra(""); setRegLvl(""); setRegSkill(0);
     say(cfg.format === "teams" ? `${nm} is registered. 🏐` : `${nm} ${cfg.format === "pairs" ? `& ${regExtra.trim()} are` : "is"} in. 🏐`);
     if (!me) { setMe(nm); store.setMe(code, nm); } // teams: identity = your team
   };
@@ -594,9 +601,11 @@ export default function App() {
       say("That name's already registered."); return;
     }
     if (cfg.format === "pairs" && !walkExtra.trim()) { say("Pairs need both names."); return; }
-    store.register(code, nm, walkExtra.trim(), cfg.format === "teams" ? walkLvl : "")
+    store.register(code, nm, walkExtra.trim(),
+      cfg.format === "teams" ? walkLvl : "",
+      cfg.format === "mix" ? walkSkill : 0)
       .catch((e) => { console.error(e); say("Couldn't save — check connection and retry."); });
-    setWalkName(""); setWalkExtra(""); setWalkLvl("");
+    setWalkName(""); setWalkExtra(""); setWalkLvl(""); setWalkSkill(0);
     say(`${nm} added.`);
   };
 
@@ -619,7 +628,7 @@ export default function App() {
   /* -------------------- setup → start -------------------- */
   const startSetup = () => {
     if (cfg.format === "mix") {
-      const roster = regs.map((r) => ({ id: uid(), name: r.name }));
+      const roster = regs.map((r) => ({ id: uid(), name: r.name, ...(r.skill ? { skill: r.skill } : {}) }));
       if (roster.length < 4) { say("Need at least 4 players."); return; }
       const live = { ...cfg, roster, status: "live", sat: Object.fromEntries(roster.map((r) => [r.id, 0])) };
       pushCfg(live);
@@ -763,10 +772,10 @@ export default function App() {
     const nm = walkName.trim();
     if (!nm) return;
     if (cfg.roster.some((r) => r.name.toLowerCase() === nm.toLowerCase())) { say("Name's taken."); return; }
-    const p = { id: uid(), name: nm };
+    const p = { id: uid(), name: nm, ...(walkSkill ? { skill: walkSkill } : {}) };
     const maxSat = Math.max(0, ...Object.values(cfg.sat || {}));
     pushCfg({ ...cfg, roster: [...cfg.roster, p], sat: { ...(cfg.sat || {}), [p.id]: maxSat } });
-    setWalkName(""); say(`${nm} added — they'll rotate in next round.`);
+    setWalkName(""); setWalkSkill(0); say(`${nm} added — they'll rotate in next round.`);
   };
 
   // director adds a complete pair mid-event (rotating pairs format)
@@ -1031,7 +1040,20 @@ export default function App() {
             </div>
           ))}
           {fFormat === "mix" && (
-            <Stepper label="Players per side" value={fTeamSize} onChange={setFTeamSize} min={2} max={6} />
+            <>
+              <Stepper label="Players per side" value={fTeamSize} onChange={setFTeamSize} min={2} max={6} />
+              <Eyebrow style={{ margin: "4px 0 8px", color: C.ink }}>Keep score?</Eyebrow>
+              <div style={{ marginBottom: 16 }}>
+                <ChoiceRow value={fCasual} onChange={setFCasual}
+                  options={[{ v: false, label: "Score & standings" }, { v: true, label: "Just play" }]} />
+                {fCasual && (
+                  <div style={{ fontSize: 12.5, color: C.dim, marginTop: 6 }}>
+                    Pure pickup: balanced random teams every round, no scores. You rotate
+                    rounds whenever the courts are ready.
+                  </div>
+                )}
+              </div>
+            </>
           )}
           <Stepper label="Courts" value={fCourts} onChange={setFCourts} min={1} max={8} />
           <Eyebrow style={{ margin: "4px 0 8px", color: C.ink }}>{fFormat === "teams" ? "Pool games to" : "Game to"}</Eyebrow>
@@ -1068,6 +1090,7 @@ export default function App() {
             <span style={{ fontSize: 12, color: C.dim }}>
               {cfg.status === "signup" ? "signup open"
                 : cfg.status === "done" ? "final"
+                : cfg.casual ? `pickup · round ${cfg.rds || 0}`
                 : cfg.stage === "playoff" ? `playoffs · ${doneCount}/${cfg.sched.length} scored`
                 : cfg.format === "teams" ? `pool play · ${doneCount}/${cfg.sched.length} scored`
                 : `live · ${doneCount}/${cfg.sched.length} scored`}
@@ -1113,7 +1136,15 @@ export default function App() {
               <Field label="Partner" value={regExtra} onChange={setRegExtra} placeholder="Their first name + initial" maxLength={20} hint="Pairs sign up together — one entry for both of you." />
             </>
           ) : (
-            <Field label="Your name" value={regName} onChange={setRegName} placeholder="First name + initial" maxLength={20} />
+            <>
+              <Field label="Your name" value={regName} onChange={setRegName} placeholder="First name + initial" maxLength={20} />
+              <div style={{ marginBottom: 14 }}>
+                <Eyebrow style={{ marginBottom: 6, color: C.ink }}>Skill (optional)</Eyebrow>
+                <ChoiceRow value={regSkill} onChange={(v) => setRegSkill(v === regSkill ? 0 : v)}
+                  options={[{ v: 1, label: "⭐" }, { v: 2, label: "⭐⭐" }, { v: 3, label: "⭐⭐⭐" }]} />
+                <div style={{ fontSize: 12.5, color: C.dim, marginTop: 5 }}>Helps balance the random teams — tap again to clear.</div>
+              </div>
+            </>
           )}
           <Btn style={{ width: "100%" }} disabled={busy} onClick={register}>
             {cfg.format === "teams" ? "Register team 🏐" : cfg.format === "pairs" ? "We're in 🏐" : "I'm in 🏐"}
@@ -1130,6 +1161,7 @@ export default function App() {
                 <span style={{ fontWeight: 700 }}>{r.name}</span>
                 {r.extra && <span style={{ color: C.dim, fontSize: 13 }}>{cfg.format === "pairs" ? " / " : " · "}{r.extra}</span>}
                 {r.lvl && <span style={{ fontFamily: MONO, color: C.dim, fontSize: 12 }}> · {r.lvl}</span>}
+                {r.skill > 0 && <span style={{ fontSize: 11 }}> {"⭐".repeat(r.skill)}</span>}
               </div>
               {adminOk && <button onClick={() => removeReg(r)} style={{ border: "none", background: "none", color: "#B3261E", fontWeight: 800, fontSize: 16, cursor: "pointer" }}>✕</button>}
             </div>
@@ -1170,6 +1202,12 @@ export default function App() {
                 <div style={{ marginBottom: 8 }}>
                   <ChoiceRow value={walkLvl} onChange={(v) => setWalkLvl(v === walkLvl ? "" : v)}
                     options={LEVELS.map((l) => ({ v: l, label: l }))} />
+                </div>
+              )}
+              {cfg.format === "mix" && (
+                <div style={{ marginBottom: 8 }}>
+                  <ChoiceRow value={walkSkill} onChange={(v) => setWalkSkill(v === walkSkill ? 0 : v)}
+                    options={[{ v: 1, label: "⭐" }, { v: 2, label: "⭐⭐" }, { v: 3, label: "⭐⭐⭐" }]} />
                 </div>
               )}
               <Btn kind="ink" small style={{ width: "100%", marginBottom: 14 }} onClick={directorAdd}>
@@ -1296,8 +1334,9 @@ export default function App() {
       );
     }
     // per-court now/next strip so courts never sit idle waiting for word
+    // (skipped in casual mode — nothing marks a match finished there)
     const upNext = [];
-    if (cfg.status === "live") {
+    if (cfg.status === "live" && !cfg.casual) {
       for (let ct = 1; ct <= cfg.courts; ct++) {
         const q = cfg.sched.filter((m) => m.ct === ct && !matchDone(m, res));
         if (q.length) upNext.push({ ct, now: q[0], next: q[1] });
@@ -1354,8 +1393,10 @@ export default function App() {
                 <MatchCard key={m.id} cfg={cfg} match={m}
                   result={m.br ? null : res[m.id]}
                   series={m.br ? seriesScore(m, res) : null}
-                  highlightIds={myIds}
-                  onTap={() => cfg.status === "done" && !adminOk ? say("Event is final — director can reopen scoring.") : setModal(m)} />
+                  highlightIds={myIds} casual={cfg.casual}
+                  onTap={() => cfg.casual ? null
+                    : cfg.status === "done" && !adminOk ? say("Event is final — director can reopen scoring.")
+                    : setModal(m)} />
               ))}
               {byes.length > 0 && (
                 <div style={{ fontSize: 13.5, color: C.dim, marginTop: -4 }}>
@@ -1498,17 +1539,20 @@ export default function App() {
             <Eyebrow>Playing as</Eyebrow>
             <div style={{ fontWeight: 900, fontSize: 22 }}>{me}</div>
           </div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 24 }}>{w}–{l}</div>
-            <div style={{ fontFamily: MONO, fontSize: 13, color: diff >= 0 ? C.green : "#B3261E" }}>{diff >= 0 ? "+" : ""}{diff}</div>
-          </div>
+          {!cfg.casual && (
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 24 }}>{w}–{l}</div>
+              <div style={{ fontFamily: MONO, fontSize: 13, color: diff >= 0 ? C.green : "#B3261E" }}>{diff >= 0 ? "+" : ""}{diff}</div>
+            </div>
+          )}
         </Card>
         <button onClick={() => { setMe(""); store.clearMe(code); }} style={{ border: "none", background: "none", color: C.dim, fontSize: 13, textDecoration: "underline", marginBottom: 12, cursor: "pointer", padding: 0 }}>Not you? Switch {cfg.format === "teams" ? "team" : "player"}</button>
-        <Eyebrow style={{ margin: "4px 0 10px" }}>Up next</Eyebrow>
+        <Eyebrow style={{ margin: "4px 0 10px" }}>{cfg.casual ? "Your matches" : "Up next"}</Eyebrow>
         {pending.length === 0 && <div style={{ color: C.dim, fontSize: 14.5, marginBottom: 14 }}>Nothing on the board — hydrate. 🧃</div>}
-        {pending.map((m) => <MatchCard key={m.id} cfg={cfg} match={m} result={null} series={m.br ? seriesScore(m, res) : null} highlightIds={myIds} onTap={() => setModal(m)} />)}
-        {played.length > 0 && <Eyebrow style={{ margin: "10px 0" }}>Played</Eyebrow>}
-        {played.map((m) => <MatchCard key={m.id} cfg={cfg} match={m} result={m.br ? null : res[m.id]} series={m.br ? seriesScore(m, res) : null} highlightIds={myIds} onTap={() => setModal(m)} />)}
+        {(cfg.casual ? [...pending].reverse() : pending).map((m) =>
+          <MatchCard key={m.id} cfg={cfg} match={m} result={null} series={m.br ? seriesScore(m, res) : null} highlightIds={myIds} casual={cfg.casual} onTap={() => cfg.casual ? null : setModal(m)} />)}
+        {!cfg.casual && played.length > 0 && <Eyebrow style={{ margin: "10px 0" }}>Played</Eyebrow>}
+        {!cfg.casual && played.map((m) => <MatchCard key={m.id} cfg={cfg} match={m} result={m.br ? null : res[m.id]} series={m.br ? seriesScore(m, res) : null} highlightIds={myIds} onTap={() => setModal(m)} />)}
       </div>
     );
   }
@@ -1619,11 +1663,13 @@ export default function App() {
         {cfg.format === "mix" && cfg.status === "live" && (
           <Card style={{ marginBottom: 14 }}>
             <Eyebrow style={{ marginBottom: 8 }}>Walk-up player</Eyebrow>
-            <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
               <input value={walkName} onChange={(e) => setWalkName(e.target.value)} placeholder="Name"
                 style={{ flex: 1, padding: "10px 12px", border: `2px solid ${C.ink}`, borderRadius: 10, fontSize: 16, minWidth: 0, background: "#fff", color: C.ink }} />
               <Btn small onClick={addWalkupLive}>Add</Btn>
             </div>
+            <ChoiceRow value={walkSkill} onChange={(v) => setWalkSkill(v === walkSkill ? 0 : v)}
+              options={[{ v: 1, label: "⭐" }, { v: 2, label: "⭐⭐" }, { v: 3, label: "⭐⭐⭐" }]} />
           </Card>
         )}
         {cfg.format === "pairs" && cfg.status === "live" && (
@@ -1782,17 +1828,18 @@ export default function App() {
       return renderPlayoffSetup();
     const TABS = [
       { v: "schedule", label: "Schedule", ico: "🗓" },
-      { v: "standings", label: "Standings", ico: "🏆" },
+      ...(cfg.casual ? [] : [{ v: "standings", label: "Standings", ico: "🏆" }]),
       { v: "me", label: "Me", ico: "🏐" },
       { v: "admin", label: "Director", ico: adminOk ? "🎛" : "🔒" },
     ];
+    const effTab = cfg.casual && tab === "standings" ? "schedule" : tab;
     return (
       <Shell toast={toast}>
         {renderHeader()}
-        {tab === "schedule" && renderSchedule()}
-        {tab === "standings" && renderStandings()}
-        {tab === "me" && renderMe()}
-        {tab === "admin" && renderAdmin()}
+        {effTab === "schedule" && renderSchedule()}
+        {effTab === "standings" && renderStandings()}
+        {effTab === "me" && renderMe()}
+        {effTab === "admin" && renderAdmin()}
         <div style={{
           position: "fixed", bottom: 0, left: 0, right: 0, background: C.paper,
           borderTop: `3px solid ${C.ink}`, display: "flex", justifyContent: "center", zIndex: 40,
@@ -1800,8 +1847,8 @@ export default function App() {
           <div style={{ display: "flex", width: "100%", maxWidth: 600 }}>
             {TABS.map((t) => (
               <button key={t.v} onClick={() => setTab(t.v)} style={{
-                flex: 1, border: "none", background: tab === t.v ? C.ink : "transparent",
-                color: tab === t.v ? C.paper : C.ink, padding: "10px 0 12px",
+                flex: 1, border: "none", background: effTab === t.v ? C.ink : "transparent",
+                color: effTab === t.v ? C.paper : C.ink, padding: "10px 0 12px",
                 fontWeight: 800, fontSize: 11.5, letterSpacing: "0.04em", cursor: "pointer",
               }}>
                 <div style={{ fontSize: 18 }}>{t.ico}</div>
