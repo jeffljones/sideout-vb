@@ -566,6 +566,41 @@ export function eventBrackets(cfg) {
   return [];
 }
 
+// Schedule grouped for display. During playoffs each bracket is its own
+// section (a division's teams stay together instead of interleaving with
+// other brackets); within a bracket, stages run newest-first. Pool play
+// and the round-based formats (pairs, mix) group by round, newest-first.
+// Returns ordered sections:
+//   { type:'bracket', name, pfx, stages:[{ label, stage, ms }] }
+//   { type:'round', rd, ms }
+export function scheduleSections(cfg) {
+  const sections = [];
+  const order = new Map(cfg.sched.map((m, i) => [m.id, i]));
+  const brackets = cfg.stage === "playoff" ? eventBrackets(cfg) : [];
+  for (const bk of brackets) {
+    const mine = cfg.sched.filter((m) => m.br && (bk.pfx ? m.id.startsWith(bk.pfx) : true));
+    if (!mine.length) continue;
+    const stageOf = (lbl) =>
+      bk.name && lbl.startsWith(bk.name + " · ") ? lbl.slice(bk.name.length + 3) : lbl;
+    const byLabel = new Map();
+    for (const m of mine) {
+      if (!byLabel.has(m.lbl))
+        byLabel.set(m.lbl, { label: m.lbl, stage: stageOf(m.lbl), order: order.get(m.id), ms: [] });
+      byLabel.get(m.lbl).ms.push(m);
+    }
+    const stages = [...byLabel.values()].sort((a, b) => b.order - a.order);
+    sections.push({ type: "bracket", name: bk.name || "", pfx: bk.pfx || "", stages });
+  }
+  const byRound = new Map();
+  for (const m of cfg.sched) {
+    if (m.br) continue; // bracket matches handled above
+    if (!byRound.has(m.rd)) byRound.set(m.rd, { rd: m.rd, ms: [] });
+    byRound.get(m.rd).ms.push(m);
+  }
+  for (const r of [...byRound.values()].sort((a, b) => b.rd - a.rd)) sections.push({ type: "round", ...r });
+  return sections;
+}
+
 // Resolves every slot of one bracket from seeds + results. Sides are a
 // team id, null (bye), or undefined (not yet determined). status:
 // 'pending' | 'bye' (auto-advance) | 'ready' | 'done'.

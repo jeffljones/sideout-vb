@@ -12,7 +12,7 @@ import {
   calcStandings, buildTeamsFromRegs, buildPairsFromRegs,
   matchDone, matchGames, seriesScore, getGameTarget,
   seedBracket, startPlayoffs, advanceBracket, genResetFinal,
-  bracketStatus, calcPlacements, eventBrackets,
+  bracketStatus, calcPlacements, eventBrackets, scheduleSections,
   LEVELS, autoAssignPools, poolName,
 } from "./engine.js";
 import * as store from "./store.js";
@@ -426,6 +426,12 @@ export default function App() {
   const [meFilter, setMeFilter] = useState("");
   const [confirmDel, setConfirmDel] = useState(false);
 
+  // landing: clean up old events
+  const [editRecents, setEditRecents] = useState(false);
+  const [delEvent, setDelEvent] = useState(null); // { code, name, pin, needsPin }
+  const [delPin, setDelPin] = useState("");
+  const [delBusy, setDelBusy] = useState(false);
+
   // setup editor
   const [setupMode, setSetupMode] = useState(false);
   const [setupGroups, setSetupGroups] = useState([]);
@@ -465,8 +471,34 @@ export default function App() {
     setView("landing"); setCode(""); setCfg(null); setRegs([]); setRes({});
     setMe(""); setAdminOk(false); setSetupMode(false);
     setPoMode(false); setPoConfirm(false);
+    setEditRecents(false); setDelEvent(null);
     setJoinInput(""); setPinInput(""); setConnOk(true); loadRecents();
   }, [loadRecents]);
+
+  // delete an old event from the recents list. The PIN is asked unless this
+  // device is the known director (it created/unlocked the event); recents
+  // are global, so the gate keeps a stray tap from nuking someone's day.
+  const askDeleteRecent = async (r) => {
+    setDelPin("");
+    try {
+      const ev = await store.loadEvent(r.code);
+      if (!ev) { say("That event is already gone."); loadRecents(); return; }
+      const known = store.getPin(r.code) && store.getPin(r.code) === ev.pin;
+      setDelEvent({ code: r.code, name: ev.name || r.name, pin: ev.pin, needsPin: !known });
+    } catch (e) { console.error(e); say("Couldn't reach the server — try again."); }
+  };
+  const confirmDeleteRecent = async () => {
+    if (!delEvent) return;
+    if (delEvent.needsPin && delPin !== delEvent.pin) { say("Wrong PIN."); return; }
+    setDelBusy(true);
+    try {
+      await store.deleteEvent(delEvent.code);
+      say(`Deleted ${delEvent.name}.`);
+      setDelEvent(null); setDelPin("");
+      await loadRecents();
+    } catch (e) { console.error(e); say("Couldn't delete — check connection and retry."); }
+    setDelBusy(false);
+  };
 
   /* -------------------- realtime subscriptions -------------------- */
   // cfg doc: subscribed for the whole stay in the event
@@ -998,12 +1030,41 @@ export default function App() {
         </Card>
         {recents.length > 0 && (
           <Card style={{ marginBottom: 18 }}>
-            <Eyebrow style={{ marginBottom: 10 }}>Recent events</Eyebrow>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <Eyebrow>Recent events</Eyebrow>
+              <button onClick={() => { setEditRecents(!editRecents); setDelEvent(null); }}
+                style={{ border: "none", background: "none", color: C.dim, fontSize: 13, fontWeight: 700, textDecoration: "underline", cursor: "pointer", padding: 0 }}>
+                {editRecents ? "Done" : "Edit"}
+              </button>
+            </div>
             {recents.map((r) => (
-              <div key={r.code} onClick={() => joinEvent(r.code)} className="pressable"
-                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 4px", borderBottom: `1.5px dashed ${C.line}`, cursor: "pointer" }}>
-                <div style={{ fontWeight: 700 }}>{r.name}</div>
-                <div style={{ fontFamily: MONO, fontWeight: 700, color: C.accent }}>{r.code}</div>
+              <div key={r.code}>
+                <div onClick={() => (editRecents ? null : joinEvent(r.code))} className={editRecents ? "" : "pressable"}
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "10px 4px", borderBottom: `1.5px dashed ${C.line}`, cursor: editRecents ? "default" : "pointer" }}>
+                  <div style={{ fontWeight: 700, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
+                  <div style={{ fontFamily: MONO, fontWeight: 700, color: C.accent }}>{r.code}</div>
+                  {editRecents && (
+                    <button onClick={() => askDeleteRecent(r)}
+                      style={{ border: "none", background: "none", color: "#B3261E", fontWeight: 800, fontSize: 16, cursor: "pointer", padding: "0 2px" }}>🗑</button>
+                  )}
+                </div>
+                {delEvent && delEvent.code === r.code && (
+                  <div style={{ padding: "10px 4px 14px", borderBottom: `1.5px dashed ${C.line}` }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, marginBottom: 8 }}>
+                      Delete “{delEvent.name}”? This erases its roster and every score.
+                    </div>
+                    {delEvent.needsPin && (
+                      <input value={delPin} inputMode="numeric"
+                        onChange={(e) => setDelPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                        placeholder="Director PIN"
+                        style={{ width: "100%", boxSizing: "border-box", fontFamily: MONO, fontSize: 18, fontWeight: 700, letterSpacing: "0.2em", textAlign: "center", padding: "8px", border: `2px solid ${C.ink}`, borderRadius: 10, marginBottom: 8, background: "#fff", color: C.ink }} />
+                    )}
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <Btn kind="ghost" small style={{ flex: 1 }} onClick={() => { setDelEvent(null); setDelPin(""); }}>Cancel</Btn>
+                      <Btn kind="danger" small style={{ flex: 1 }} disabled={delBusy} onClick={confirmDeleteRecent}>Delete</Btn>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </Card>
@@ -1343,19 +1404,19 @@ export default function App() {
       }
     }
     const vsLine = (m) => `${sideLabel(cfg, m.a)} vs ${sideLabel(cfg, m.b)}`;
-    // group pool matches by round, bracket matches by their stage label;
-    // newest group on top (matches the old newest-round-first ordering)
-    const groups = [];
-    const byKey = new Map();
-    cfg.sched.forEach((m, i) => {
-      const key = m.lbl || `ROUND ${m.rd}`;
-      if (!byKey.has(key)) {
-        const g = { key, rd: m.lbl ? null : m.rd, order: i, ms: [] };
-        byKey.set(key, g); groups.push(g);
-      }
-      byKey.get(key).ms.push(m);
-    });
-    groups.sort((x, y) => y.order - x.order);
+    // each bracket's teams stay together (newest stage on top); pool play
+    // and the round-based formats group by round, newest first
+    const sections = scheduleSections(cfg);
+    const bracketCount = sections.filter((s) => s.type === "bracket").length;
+    const cardFor = (m) => (
+      <MatchCard key={m.id} cfg={cfg} match={m}
+        result={m.br ? null : res[m.id]}
+        series={m.br ? seriesScore(m, res) : null}
+        highlightIds={myIds} casual={cfg.casual}
+        onTap={() => cfg.casual ? null
+          : cfg.status === "done" && !adminOk ? say("Event is final — director can reopen scoring.")
+          : setModal(m)} />
+    );
     return (
       <div>
         {upNext.length > 0 && (
@@ -1380,24 +1441,39 @@ export default function App() {
             ))}
           </Card>
         )}
-        {groups.map((grp) => {
-          const byes = grp.rd != null ? (cfg.byes || {})[grp.rd] || [] : [];
-          const sit = grp.rd != null ? (cfg.sit || {})[grp.rd] || [] : [];
+        {sections.map((sec) => {
+          if (sec.type === "bracket") {
+            return (
+              <div key={"br:" + sec.pfx} style={{ marginBottom: 22 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                  <div style={{ fontFamily: MONO, fontWeight: 800, fontSize: 14, background: C.ink, color: C.paper, borderRadius: 8, padding: "5px 12px", letterSpacing: "0.06em" }}>
+                    {bracketCount > 1 ? `BRACKET ${sec.name}` : "PLAYOFF BRACKET"}
+                  </div>
+                  <div style={{ flex: 1, borderTop: `3px solid ${C.ink}` }} />
+                </div>
+                {sec.stages.map((st) => (
+                  <div key={st.label} style={{ marginBottom: 16 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                      <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 12.5, background: C.accent, color: "#fff", borderRadius: 8, padding: "3px 9px" }}>{st.stage}</div>
+                      <div style={{ flex: 1, borderTop: `1.5px solid ${C.line}` }} />
+                    </div>
+                    {st.ms.map(cardFor)}
+                  </div>
+                ))}
+              </div>
+            );
+          }
+          const byes = (cfg.byes || {})[sec.rd] || [];
+          const sit = (cfg.sit || {})[sec.rd] || [];
           return (
-            <div key={grp.key} style={{ marginBottom: 20 }}>
+            <div key={"rd:" + sec.rd} style={{ marginBottom: 20 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 13, background: C.accent, color: "#fff", borderRadius: 8, padding: "4px 10px" }}>{grp.key}</div>
+                <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 13, background: C.accent, color: "#fff", borderRadius: 8, padding: "4px 10px" }}>
+                  {cfg.stage === "playoff" ? `POOL · ROUND ${sec.rd}` : `ROUND ${sec.rd}`}
+                </div>
                 <div style={{ flex: 1, borderTop: `2px solid ${C.line}` }} />
               </div>
-              {grp.ms.map((m) => (
-                <MatchCard key={m.id} cfg={cfg} match={m}
-                  result={m.br ? null : res[m.id]}
-                  series={m.br ? seriesScore(m, res) : null}
-                  highlightIds={myIds} casual={cfg.casual}
-                  onTap={() => cfg.casual ? null
-                    : cfg.status === "done" && !adminOk ? say("Event is final — director can reopen scoring.")
-                    : setModal(m)} />
-              ))}
+              {sec.ms.map(cardFor)}
               {byes.length > 0 && (
                 <div style={{ fontSize: 13.5, color: C.dim, marginTop: -4 }}>
                   Bye: {byes.map((g) => groupLabel(cfg, g)).join(", ")}

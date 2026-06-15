@@ -57,7 +57,15 @@ share one ref). In the bracket, the losing team refs the next game — the
 most recently beaten free team gets the whistle; round one uses the bye
 teams, worst seed first, and the top seed is spared first-game duty
 unless they're the only option. The Schedule tab shows a per-court
-**now / next strip** with refs so courts never idle.
+**now / next strip** with refs so courts never idle. During playoffs the
+schedule is **grouped by bracket** — each division's matches stay together
+(newest stage on top) rather than interleaving, with pool-play rounds
+below.
+
+Old events can be cleaned up from the landing page: tap **Edit** on the
+Recent events list, then the trash icon. Deletion asks for the director
+PIN unless this device is the known director, and removes the event with
+all its regs, results, and live docs.
 
 ## Stack
 

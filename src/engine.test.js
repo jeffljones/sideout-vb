@@ -899,3 +899,59 @@ describe("skill balancing (mix)", () => {
     expect(out.cfg.sit[1]).toHaveLength(1);
   });
 });
+
+/* ---------------- schedule grouping ---------------- */
+import { scheduleSections, startPlayoffs as startPO } from "./engine.js";
+
+describe("scheduleSections", () => {
+  it("round-based formats: one section per round, newest first", () => {
+    const cfg = baseCfg({ format: "mix", sched: [
+      { id: "m1", rd: 1, ct: 1, a: { p: ["x"] }, b: { p: ["y"] } },
+      { id: "m2", rd: 2, ct: 1, a: { p: ["x"] }, b: { p: ["y"] } },
+    ] });
+    const secs = scheduleSections(cfg);
+    expect(secs.map((s) => s.type)).toEqual(["round", "round"]);
+    expect(secs.map((s) => s.rd)).toEqual([2, 1]); // newest first
+  });
+
+  it("multi-bracket playoffs: one section per bracket, teams never interleave", () => {
+    const groups = Array.from({ length: 8 }, (_, i) => ({ id: "t" + i, name: "T" + i, players: [] }));
+    let cfg = baseCfg({
+      format: "teams", groups, courts: 4, stage: "pool", pools: 2, seeds: [], po: {},
+      sched: [
+        { id: "m1", rd: 1, ct: 1, pl: 1, a: { g: ["t0"] }, b: { g: ["t2"] } },
+        { id: "m2", rd: 1, ct: 2, pl: 2, a: { g: ["t1"] }, b: { g: ["t3"] } },
+      ],
+    });
+    const res = { m1: { a: 21, b: 5 }, m2: { a: 21, b: 5 } };
+    cfg = startPO(cfg, res, { brackets: [["t0", "t2", "t4", "t6"], ["t1", "t3", "t5", "t7"]], po: {} }).cfg;
+    const secs = scheduleSections(cfg);
+    const brs = secs.filter((s) => s.type === "bracket");
+    expect(brs.map((b) => b.name)).toEqual(["A", "B"]);
+    for (const m of brs[0].stages.flatMap((st) => st.ms)) expect(m.id.startsWith("b1")).toBe(true);
+    for (const m of brs[1].stages.flatMap((st) => st.ms)) expect(m.id.startsWith("b2")).toBe(true);
+    // stage labels are stripped of the "A · " bracket prefix
+    expect(brs[0].stages.every((st) => !st.stage.includes("·"))).toBe(true);
+    // pool rounds come after the brackets
+    expect(secs[secs.length - 1].type).toBe("round");
+  });
+
+  it("single bracket: all stages under one unnamed section", () => {
+    const groups = Array.from({ length: 4 }, (_, i) => ({ id: "t" + i, name: "T" + i, players: [] }));
+    let cfg = baseCfg({ format: "teams", groups, courts: 2, stage: "pool", seeds: [], po: {} });
+    cfg = startPO(cfg, {}, { brackets: [["t0", "t1", "t2", "t3"]], po: {} }).cfg;
+    const brs = scheduleSections(cfg).filter((s) => s.type === "bracket");
+    expect(brs).toHaveLength(1);
+    expect(brs[0].name).toBe("");
+    const inSec = brs[0].stages.flatMap((st) => st.ms.map((m) => m.id)).sort();
+    expect(inSec).toEqual(cfg.sched.filter((m) => m.br).map((m) => m.id).sort());
+  });
+
+  it("pool play (no playoffs yet): only round sections", () => {
+    const groups = Array.from({ length: 4 }, (_, i) => ({ id: "t" + i, name: "T" + i, players: [] }));
+    const cfg = genPoolPlay(baseCfg({ format: "teams", groups, pools: 1, courts: 2, stage: "pool" }));
+    const secs = scheduleSections(cfg);
+    expect(secs.every((s) => s.type === "round")).toBe(true);
+    expect(secs).toHaveLength(cfg.rds);
+  });
+});
