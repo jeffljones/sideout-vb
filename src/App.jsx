@@ -1289,6 +1289,44 @@ export default function App() {
   /* ---------- setup editor ---------- */
   function renderSetup() {
     const want = cfg.format === "pairs" ? 2 : 0; // teams: any roster size is fine
+    const teamCard = (g) => (
+      <Card key={g.id} style={{ marginBottom: 12, padding: 12, borderLeft: g.players.length < want ? `6px solid ${C.gold}` : `2px solid ${C.ink}` }}>
+        {cfg.format === "teams" ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <input value={g.name} onChange={(e) => renameGroup(g.id, e.target.value)}
+              style={{ fontWeight: 800, fontSize: 16, border: "none", background: "transparent", color: C.ink, flex: 1, minWidth: 0, padding: 0 }} />
+            {g.lvl && <span style={{ fontFamily: MONO, fontSize: 12, color: C.dim, flexShrink: 0 }}>{g.lvl}</span>}
+            {setupPools > 1 && (
+              <button className="pressable" onClick={() => flipPool(g.id)} style={{
+                fontFamily: MONO, fontWeight: 700, fontSize: 12, letterSpacing: "0.06em",
+                background: (g.pool || 1) === 1 ? C.accent : C.ink, color: "#fff",
+                border: `2px solid ${C.ink}`, borderRadius: 7, padding: "4px 8px",
+                boxShadow: `2px 2px 0 ${C.ink}`, flexShrink: 0,
+              }}>POOL {poolName(g.pool || 1)}</button>
+            )}
+          </div>
+        ) : (
+          <Eyebrow style={{ marginBottom: 6 }}>{g.name}{g.players.length < 2 ? " · needs a partner" : ""}</Eyebrow>
+        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {g.players.map((pid) => {
+            const p = setupRoster.find((r) => r.id === pid);
+            return (
+              <button key={pid} className="pressable" onClick={() => tapChip(pid)} style={{
+                padding: "9px 13px", borderRadius: 999, fontWeight: 700, fontSize: 15,
+                border: `2px solid ${C.ink}`,
+                background: sel === pid ? C.accent : "#fff",
+                color: sel === pid ? "#fff" : C.ink,
+                boxShadow: `2px 2px 0 ${C.ink}`,
+              }}>{p ? p.name : "?"}</button>
+            );
+          })}
+          {cfg.format === "teams" && g.players.length === 0 && (
+            <span style={{ fontSize: 13, color: C.dim, fontStyle: "italic" }}>no players listed</span>
+          )}
+        </div>
+      </Card>
+    );
     return (
       <Shell toast={toast}>
         {renderHeader()}
@@ -1322,41 +1360,25 @@ export default function App() {
             )}
           </Card>
         )}
-        {setupGroups.map((g) => (
-          <Card key={g.id} style={{ marginBottom: 12, padding: 12, borderLeft: g.players.length < want ? `6px solid ${C.gold}` : `2px solid ${C.ink}` }}>
-            {cfg.format === "teams" ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                <input value={g.name} onChange={(e) => renameGroup(g.id, e.target.value)}
-                  style={{ fontWeight: 800, fontSize: 16, border: "none", background: "transparent", color: C.ink, flex: 1, minWidth: 0, padding: 0 }} />
-                {g.lvl && <span style={{ fontFamily: MONO, fontSize: 12, color: C.dim, flexShrink: 0 }}>{g.lvl}</span>}
-                {setupPools > 1 && (
-                  <button className="pressable" onClick={() => flipPool(g.id)} style={{
-                    fontFamily: MONO, fontWeight: 700, fontSize: 12, letterSpacing: "0.06em",
-                    background: (g.pool || 1) === 1 ? C.accent : C.ink, color: "#fff",
-                    border: `2px solid ${C.ink}`, borderRadius: 7, padding: "4px 8px",
-                    boxShadow: `2px 2px 0 ${C.ink}`, flexShrink: 0,
-                  }}>POOL {poolName(g.pool || 1)}</button>
-                )}
-              </div>
-            ) : (
-              <Eyebrow style={{ marginBottom: 6 }}>{g.name}{g.players.length < 2 ? " · needs a partner" : ""}</Eyebrow>
-            )}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {g.players.map((pid) => {
-                const p = setupRoster.find((r) => r.id === pid);
-                return (
-                  <button key={pid} className="pressable" onClick={() => tapChip(pid)} style={{
-                    padding: "9px 13px", borderRadius: 999, fontWeight: 700, fontSize: 15,
-                    border: `2px solid ${C.ink}`,
-                    background: sel === pid ? C.accent : "#fff",
-                    color: sel === pid ? "#fff" : C.ink,
-                    boxShadow: `2px 2px 0 ${C.ink}`,
-                  }}>{p ? p.name : "?"}</button>
-                );
-              })}
-            </div>
-          </Card>
-        ))}
+        {cfg.format === "teams" && setupPools > 1
+          ? Array.from({ length: setupPools }, (_, i) => {
+              const pool = i + 1;
+              const inPool = setupGroups.filter((g) => (g.pool || 1) === pool);
+              return (
+                <div key={"pool" + pool} style={{ marginBottom: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 10px" }}>
+                    <div style={{ fontFamily: MONO, fontWeight: 800, fontSize: 14, background: C.ink, color: C.paper, borderRadius: 8, padding: "5px 12px", letterSpacing: "0.06em" }}>
+                      POOL {poolName(pool)} · {inPool.length}
+                    </div>
+                    <div style={{ flex: 1, borderTop: `3px solid ${C.ink}` }} />
+                  </div>
+                  {inPool.length === 0
+                    ? <div style={{ color: C.dim, fontSize: 13.5, marginBottom: 12 }}>No teams yet — tap a team's pool tag to move one here.</div>
+                    : inPool.map(teamCard)}
+                </div>
+              );
+            })
+          : setupGroups.map(teamCard)}
         <Card style={{ marginBottom: 14 }}>
           <Eyebrow style={{ marginBottom: 8 }}>{cfg.format === "teams" ? "Add a walk-up team" : "Add a walk-up pair"}</Eyebrow>
           <input value={walkName} onChange={(e) => setWalkName(e.target.value)}
