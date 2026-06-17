@@ -798,17 +798,24 @@ export function seedBracket(cfg, res, teamIds) {
 }
 
 // brackets: array of team-id arrays (seed order), one per playoff bracket.
+// names: optional parallel array of display names (blank → auto A/B/C…).
 // Empty input brackets are skipped; a non-empty bracket that validates to
 // fewer than 2 real teams is an error, never a silent drop.
-export function startPlayoffs(cfg, res, { brackets, po }) {
-  const input = (brackets || []).filter((seeds) => (seeds || []).length > 0);
-  const lists = input.map((seeds) => [...new Set(seeds)].filter((gid) => groupOf(cfg, gid)));
-  if (!lists.length || lists.some((seeds) => seeds.length < 2))
+export function startPlayoffs(cfg, res, { brackets, names, po }) {
+  const kept = (brackets || [])
+    .map((seeds, i) => ({
+      seeds: [...new Set(seeds || [])].filter((gid) => groupOf(cfg, gid)),
+      rawLen: (seeds || []).length,
+      name: (names && names[i] ? String(names[i]).trim() : "").slice(0, 16),
+    }))
+    .filter((b) => b.rawLen > 0); // skip only truly-empty bracket slots
+  if (!kept.length || kept.some((b) => b.seeds.length < 2))
     return { cfg, error: "Every bracket needs at least 2 teams." };
-  const named = lists.map((seeds, i) => ({
+  const multi = kept.length > 1;
+  const named = kept.map((b, i) => ({
     pfx: `b${i + 1}`,
-    name: lists.length > 1 ? poolName(i + 1) : "",
-    seeds,
+    name: b.name || (multi ? poolName(i + 1) : ""),
+    seeds: b.seeds,
   }));
   const next = {
     ...cfg, stage: "playoff", brackets: named, seeds: [],

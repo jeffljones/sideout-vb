@@ -42,9 +42,10 @@ whole tournament** — teams state a level at signup (Open/AA/A/BB/B/Rec),
 the director splits teams into up to six pool-play groups (auto-grouped
 by level, strongest in pool A, tap to override), and the playoff screen
 seeds **any number of brackets**: change the bracket count day-of (3
-divisions of pool play → 2 or 4 playoff brackets), move teams between
-divisions, drop a team that left, add one that walked over — all before
-anything locks. A "straight to brackets" option at lock-in supports
+divisions of pool play → 2 or 4 playoff brackets), name each bracket
+(Gold / Silver / Rec…), move teams straight to any pool or bracket with a
+one-tap picker (no cycling), drop a team that left, add one that walked
+over — all before anything locks. A "straight to brackets" option at lock-in supports
 day-two divisions hand-seeded off day-one results. Rally vs sideout
 scoring needs no app support — final scores are final scores.
 Mid-*bracket* roster changes are deliberately unsupported (they would

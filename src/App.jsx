@@ -440,9 +440,11 @@ export default function App() {
   const [setupPools, setSetupPools] = useState(1);
   const [setupPlan, setSetupPlan] = useState("pool"); // 'pool' | 'bracket'
 
-  // playoff seeding editor (teams format) — poBr is one seed list per bracket
+  // playoff seeding editor (teams format) — poBr is one seed list per bracket,
+  // poNames the parallel display names (blank → auto A/B/C…)
   const [poMode, setPoMode] = useState(false);
   const [poBr, setPoBr] = useState([]);
+  const [poNames, setPoNames] = useState([]);
   const [poSel, setPoSel] = useState(null);
   const [poAddTo, setPoAddTo] = useState(0);
   const [poG12, setPoG12] = useState(21);
@@ -681,9 +683,9 @@ export default function App() {
     setSetupPools(n);
     setSetupGroups(autoAssignPools(setupGroups, n)); // by level, strongest in pool A
   };
-  const flipPool = (gid) => {
-    setSetupGroups(setupGroups.map((g) =>
-      g.id === gid ? { ...g, pool: ((g.pool || 1) % setupPools) + 1 } : g));
+  // direct: send a team straight to a chosen pool (no cycling/hunting)
+  const setTeamPool = (gid, pool) => {
+    setSetupGroups(setupGroups.map((g) => (g.id === gid ? { ...g, pool } : g)));
   };
 
   const tapChip = (pid) => {
@@ -835,12 +837,18 @@ export default function App() {
       byB[b - 1].push(g.id);
     }
     setPoBr(byB.map((ids) => seedBracket(cfg, res, ids)));
+    setPoNames(byB.map(() => ""));
     setPoG12((cfg.po && cfg.po.g12) || 21);
     setPoG3((cfg.po && cfg.po.g3) || 15);
     setPoSel(null); setPoConfirm(false); setPoAddTo(0);
     setWalkName(""); setWalkExtra("");
     setPoMode(true);
   };
+
+  // display name for bracket index i (custom, else auto letter)
+  const brName = (i) => (poNames[i] && poNames[i].trim()) || poolName(i + 1);
+  const setBrName = (i, name) =>
+    setPoNames((cur) => cur.map((n, idx) => (idx === i ? name : n)));
 
   // Day two sometimes runs more (or fewer) divisions than pool play did:
   // shrinking folds the removed bracket's teams into the last one kept,
@@ -855,11 +863,16 @@ export default function App() {
       while (next.length < k) next.push([]);
       return next;
     });
+    setPoNames((cur) => {
+      const next = [...cur];
+      while (next.length > k) next.pop();
+      while (next.length < k) next.push("");
+      return next;
+    });
     setPoSel(null); setPoAddTo(0);
   };
 
-  // tap-tap: same bracket swaps seeds; across brackets moves the selected
-  // team in front of the tapped one
+  // tap two teams in one bracket to swap their seeds
   const poTapTeam = (gid, bIdx) => {
     if (poSel === gid) { setPoSel(null); return; }
     if (!poSel) { setPoSel(gid); return; }
@@ -875,11 +888,14 @@ export default function App() {
     setPoBr(next); setPoSel(null);
   };
 
-  const poMoveHere = (bIdx) => {
-    if (!poSel) return;
-    const next = poBr.map((l) => l.filter((x) => x !== poSel));
-    next[bIdx].push(poSel);
-    setPoBr(next); setPoSel(null);
+  // direct: send a team straight to a chosen bracket (seeded last there)
+  const poMoveTo = (gid, destIdx) => {
+    setPoBr((cur) => {
+      const next = cur.map((l) => l.filter((x) => x !== gid));
+      next[destIdx].push(gid);
+      return next;
+    });
+    setPoSel(null);
   };
 
   const poDrop = (gid) => {
@@ -908,11 +924,11 @@ export default function App() {
     pushCfg({ ...cfg, roster: [...cfg.roster, ...players], groups: [...(cfg.groups || []), g] });
     setPoBr((cur) => cur.map((l, i) => (i === Math.min(poAddTo, cur.length - 1) ? [...l, g.id] : l)));
     setWalkName(""); setWalkExtra("");
-    say(`${nm} is in — seeded last in bracket ${poolName(Math.min(poAddTo, poBr.length - 1) + 1)}.`);
+    say(`${nm} is in — seeded last in bracket ${brName(Math.min(poAddTo, poBr.length - 1))}.`);
   };
 
   const confirmStartPlayoffs = () => {
-    const out = startPlayoffs(cfg, res, { brackets: poBr, po: { g12: poG12, g3: poG3 } });
+    const out = startPlayoffs(cfg, res, { brackets: poBr, names: poNames, po: { g12: poG12, g3: poG3 } });
     if (out.error) { say(out.error); return; }
     pushCfg(out.cfg);
     setPoMode(false); setPoConfirm(false); setTab("schedule");
@@ -1292,19 +1308,29 @@ export default function App() {
     const teamCard = (g) => (
       <Card key={g.id} style={{ marginBottom: 12, padding: 12, borderLeft: g.players.length < want ? `6px solid ${C.gold}` : `2px solid ${C.ink}` }}>
         {cfg.format === "teams" ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <input value={g.name} onChange={(e) => renameGroup(g.id, e.target.value)}
-              style={{ fontWeight: 800, fontSize: 16, border: "none", background: "transparent", color: C.ink, flex: 1, minWidth: 0, padding: 0 }} />
-            {g.lvl && <span style={{ fontFamily: MONO, fontSize: 12, color: C.dim, flexShrink: 0 }}>{g.lvl}</span>}
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: setupPools > 1 ? 8 : 6 }}>
+              <input value={g.name} onChange={(e) => renameGroup(g.id, e.target.value)}
+                style={{ fontWeight: 800, fontSize: 16, border: "none", background: "transparent", color: C.ink, flex: 1, minWidth: 0, padding: 0 }} />
+              {g.lvl && <span style={{ fontFamily: MONO, fontSize: 12, color: C.dim, flexShrink: 0 }}>{g.lvl}</span>}
+            </div>
             {setupPools > 1 && (
-              <button className="pressable" onClick={() => flipPool(g.id)} style={{
-                fontFamily: MONO, fontWeight: 700, fontSize: 12, letterSpacing: "0.06em",
-                background: (g.pool || 1) === 1 ? C.accent : C.ink, color: "#fff",
-                border: `2px solid ${C.ink}`, borderRadius: 7, padding: "4px 8px",
-                boxShadow: `2px 2px 0 ${C.ink}`, flexShrink: 0,
-              }}>POOL {poolName(g.pool || 1)}</button>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+                <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim, marginRight: 2 }}>POOL</span>
+                {Array.from({ length: setupPools }, (_, i) => i + 1).map((p) => {
+                  const on = (g.pool || 1) === p;
+                  return (
+                    <button key={p} className="pressable" onClick={() => setTeamPool(g.id, p)} style={{
+                      fontFamily: MONO, fontWeight: 700, fontSize: 12.5, minWidth: 32,
+                      padding: "5px 9px", borderRadius: 7, border: `2px solid ${C.ink}`,
+                      background: on ? C.ink : "#fff", color: on ? C.paper : C.ink,
+                      boxShadow: on ? "none" : `2px 2px 0 ${C.ink}`, cursor: on ? "default" : "pointer",
+                    }}>{poolName(p)}</button>
+                  );
+                })}
+              </div>
             )}
-          </div>
+          </>
         ) : (
           <Eyebrow style={{ marginBottom: 6 }}>{g.name}{g.players.length < 2 ? " · needs a partner" : ""}</Eyebrow>
         )}
@@ -1806,7 +1832,6 @@ export default function App() {
     const inAny = new Set(poBr.flat());
     const dropped = (cfg.groups || []).filter((g) => !inAny.has(g.id));
     const totalSeeded = poBr.reduce((n, l) => n + l.length, 0);
-    const selFrom = poSel ? poBr.findIndex((l) => l.includes(poSel)) : -1;
     return (
       <Shell toast={toast}>
         {renderHeader()}
@@ -1814,8 +1839,8 @@ export default function App() {
           <div style={{ fontWeight: 900, fontSize: 20 }}>Seed the playoff brackets</div>
           <div style={{ fontSize: 13.5, color: C.dim, marginTop: 4 }}>
             Seeds come from pool standings. Tap two teams in one bracket to swap
-            seeds; tap a team then a spot in another bracket (or its "move here")
-            to change divisions. ✕ pulls a team out entirely.
+            their seeds. To change a team's bracket, tap it and pick a MOVE TO
+            target. ✕ pulls a team out. Tap a bracket's title to rename it.
           </div>
         </Card>
         <Card style={{ marginBottom: 14 }}>
@@ -1829,28 +1854,41 @@ export default function App() {
         </Card>
         {poBr.map((list, bIdx) => (
           <Card key={bIdx} style={{ marginBottom: 14, padding: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <Eyebrow>Bracket {poolName(bIdx + 1)} · {list.length} team{list.length === 1 ? "" : "s"}</Eyebrow>
-              {poSel && selFrom !== bIdx && (
-                <Btn kind="ink" small onClick={() => poMoveHere(bIdx)}>⇣ Move here</Btn>
-              )}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <input value={poNames[bIdx] || ""} onChange={(e) => setBrName(bIdx, e.target.value.slice(0, 16))}
+                placeholder={`Bracket ${poolName(bIdx + 1)}`}
+                style={{ fontWeight: 800, fontSize: 15, border: "none", borderBottom: `2px solid ${C.line}`, background: "transparent", color: C.ink, flex: 1, minWidth: 0, padding: "2px 0" }} />
+              <span style={{ fontFamily: MONO, fontSize: 11.5, color: C.dim, flexShrink: 0 }}>{list.length} team{list.length === 1 ? "" : "s"}</span>
             </div>
             {list.map((gid, i) => {
               const g = groupOf(cfg, gid) || {};
               return (
-                <div key={gid} onClick={() => poTapTeam(gid, bIdx)} className="pressable" style={{
-                  display: "flex", alignItems: "center", gap: 10, padding: "9px 8px",
-                  borderBottom: `1.5px dashed ${C.line}`, cursor: "pointer", borderRadius: 8,
-                  background: poSel === gid ? C.accentSoft : "transparent",
-                }}>
-                  <div style={{ fontFamily: MONO, fontWeight: 700, width: 28, color: poSel === gid ? C.accent : C.dim }}>{i + 1}</div>
-                  <div style={{ flex: 1, fontWeight: 700 }}>{groupLabel(cfg, gid)}</div>
-                  {g.lvl && <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{g.lvl}</span>}
-                  {(cfg.pools || 1) > 1 && g.pool && (
-                    <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>POOL {poolName(g.pool)}</span>
+                <div key={gid}>
+                  <div onClick={() => poTapTeam(gid, bIdx)} className="pressable" style={{
+                    display: "flex", alignItems: "center", gap: 10, padding: "9px 8px",
+                    borderBottom: `1.5px dashed ${C.line}`, cursor: "pointer", borderRadius: 8,
+                    background: poSel === gid ? C.accentSoft : "transparent",
+                  }}>
+                    <div style={{ fontFamily: MONO, fontWeight: 700, width: 28, color: poSel === gid ? C.accent : C.dim }}>{i + 1}</div>
+                    <div style={{ flex: 1, fontWeight: 700 }}>{groupLabel(cfg, gid)}</div>
+                    {g.lvl && <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>{g.lvl}</span>}
+                    {(cfg.pools || 1) > 1 && g.pool && (
+                      <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>POOL {poolName(g.pool)}</span>
+                    )}
+                    <button onClick={(e) => { e.stopPropagation(); poDrop(gid); }}
+                      style={{ border: "none", background: "none", color: "#B3261E", fontWeight: 800, fontSize: 16, cursor: "pointer" }}>✕</button>
+                  </div>
+                  {poSel === gid && poBr.length > 1 && (
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: "8px 8px 10px 36px" }}>
+                      <span style={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>MOVE TO</span>
+                      {poBr.map((_, di) => (di === bIdx ? null : (
+                        <button key={di} className="pressable" onClick={() => poMoveTo(gid, di)} style={{
+                          fontFamily: MONO, fontWeight: 700, fontSize: 12.5, padding: "5px 10px", borderRadius: 7,
+                          border: `2px solid ${C.ink}`, background: "#fff", color: C.ink, boxShadow: `2px 2px 0 ${C.ink}`,
+                        }}>{brName(di)}</button>
+                      )))}
+                    </div>
                   )}
-                  <button onClick={(e) => { e.stopPropagation(); poDrop(gid); }}
-                    style={{ border: "none", background: "none", color: "#B3261E", fontWeight: 800, fontSize: 16, cursor: "pointer" }}>✕</button>
                 </div>
               );
             })}
@@ -1878,10 +1916,10 @@ export default function App() {
           {poBr.length > 1 && (
             <div style={{ marginBottom: 8 }}>
               <ChoiceRow value={poAddTo} onChange={setPoAddTo}
-                options={poBr.map((_, i) => ({ v: i, label: poolName(i + 1) }))} />
+                options={poBr.map((_, i) => ({ v: i, label: brName(i) }))} />
             </div>
           )}
-          <Btn kind="ink" small style={{ width: "100%" }} onClick={poAddTeam}>Add to bracket {poolName(Math.min(poAddTo, Math.max(0, poBr.length - 1)) + 1)}</Btn>
+          <Btn kind="ink" small style={{ width: "100%" }} onClick={poAddTeam}>Add to bracket {brName(Math.min(poAddTo, Math.max(0, poBr.length - 1)))}</Btn>
         </Card>
         <Card style={{ marginBottom: 14 }}>
           <Eyebrow style={{ marginBottom: 8 }}>Games 1–2 to</Eyebrow>

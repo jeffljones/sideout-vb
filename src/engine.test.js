@@ -955,3 +955,19 @@ describe("scheduleSections", () => {
     expect(secs).toHaveLength(cfg.rds);
   });
 });
+
+  it("custom bracket names flow into labels, status, and schedule grouping", () => {
+    const groups = Array.from({ length: 8 }, (_, i) => ({ id: "t" + i, name: "T" + i, players: [] }));
+    let cfg = baseCfg({ format: "teams", groups, courts: 4, stage: "pool", seeds: [], po: {} });
+    cfg = startPO(cfg, {}, {
+      brackets: [["t0", "t1", "t2", "t3"], ["t4", "t5", "t6", "t7"]],
+      names: ["Gold", ""], po: {},
+    }).cfg;
+    const bks = eventBrackets(cfg);
+    expect(bks[0].name).toBe("Gold");
+    expect(bks[1].name).toBe("B"); // blank falls back to the auto letter
+    const secs = scheduleSections(cfg).filter((s) => s.type === "bracket");
+    expect(secs[0].name).toBe("Gold");
+    expect(secs[0].stages.every((st) => !st.stage.includes("·"))).toBe(true); // prefix stripped
+    expect(cfg.sched.some((m) => m.lbl && m.lbl.startsWith("Gold · "))).toBe(true);
+  });
